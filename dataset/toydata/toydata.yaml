@@ -1,0 +1,30 @@
+name: toydata
+target_column: approved
+feature_order:
+  - age
+  - income
+  - savings
+  - debt
+  - credit_score
+  - approved
+raw_feature_type:
+  age: numerical
+  income: numerical
+  savings: numerical
+  debt: numerical
+  credit_score: numerical
+  approved: binary
+raw_feature_mutability:
+  age: false
+  income: true
+  savings: true
+  debt: true
+  credit_score: true
+  approved: false
+raw_feature_actionability:
+  age: none
+  income: same-or-increase
+  savings: same-or-increase
+  debt: same-or-decrease
+  credit_score: same-or-increase
+  approved: none
