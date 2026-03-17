@@ -17,14 +17,40 @@ def resolve_device(device: str) -> str:
     return device
 
 
-def logits_to_prediction(logits: torch.Tensor, proba: bool = True) -> torch.Tensor:
-    probabilities = torch.softmax(logits, dim=1)
-    if proba:
-        return probabilities
-    indices = probabilities.argmax(dim=1)
-    return torch.nn.functional.one_hot(indices, num_classes=probabilities.shape[1]).to(
-        dtype=torch.float32
-    )
+def logits_to_prediction(
+    logits: torch.Tensor,
+    proba: bool = True,
+    output_activation: str = "softmax",
+) -> torch.Tensor:
+    output_activation = output_activation.lower()
+    if output_activation == "softmax":
+        probabilities = torch.softmax(logits, dim=1)
+        if proba:
+            return probabilities
+        indices = probabilities.argmax(dim=1)
+        return torch.nn.functional.one_hot(
+            indices, num_classes=probabilities.shape[1]
+        ).to(dtype=torch.float32)
+
+    if output_activation == "sigmoid":
+        if logits.ndim == 1:
+            logits = logits.unsqueeze(1)
+        if logits.shape[1] != 1:
+            raise ValueError(
+                "sigmoid output activation requires a single-logit output layer"
+            )
+        positive_probability = torch.sigmoid(logits)
+        probabilities = torch.cat(
+            [1.0 - positive_probability, positive_probability], dim=1
+        )
+        if proba:
+            return probabilities
+        indices = (positive_probability.reshape(-1) >= 0.5).to(dtype=torch.long)
+        return torch.nn.functional.one_hot(indices, num_classes=2).to(
+            dtype=torch.float32
+        )
+
+    raise ValueError(f"Unsupported output activation: {output_activation}")
 
 
 def build_optimizer(optimizer_name: str, parameters, learning_rate: float):

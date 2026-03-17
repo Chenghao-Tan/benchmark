@@ -29,6 +29,7 @@ class LinearModel(ModelObject):
         batch_size: int = 16,
         optimizer: str = "adam",
         criterion: str = "cross_entropy",
+        output_activation: str = "softmax",
         pretrained_path: str | None = None,
         save_name: str | None = None,
         **kwargs,
@@ -43,16 +44,32 @@ class LinearModel(ModelObject):
         self._batch_size: int = int(batch_size)
         self._optimizer_name: str = optimizer
         self._criterion_name: str = criterion.lower()
+        self._output_activation_name: str = output_activation.lower()
         self._pretrained_path: str | None = pretrained_path
         self._save_name: str | None = save_name
         self._output_dim: int | None = None
 
         if self._batch_size < 1:
             raise ValueError("batch_size must be >= 1")
-        if self._criterion_name != "cross_entropy":
+        if self._criterion_name not in {"cross_entropy", "bce"}:
             raise ValueError(
-                "LinearModel currently supports criterion='cross_entropy' only"
+                "LinearModel supports criterion='cross_entropy' or criterion='bce' only"
             )
+        if self._output_activation_name not in {"softmax", "sigmoid"}:
+            raise ValueError(
+                "LinearModel output_activation must be 'softmax' or 'sigmoid'"
+            )
+        if self._output_activation_name == "sigmoid" and self._criterion_name != "bce":
+            raise ValueError(
+                "LinearModel output_activation='sigmoid' requires criterion='bce'"
+            )
+        if self._output_activation_name == "softmax" and self._criterion_name == "bce":
+            raise ValueError(
+                "LinearModel output_activation='softmax' is incompatible with criterion='bce'"
+            )
+
+    def _build_model(self, input_dim: int, output_dim: int) -> torch.nn.Module:
+        return torch.nn.Linear(input_dim, output_dim)
 
     def fit(self, trainset: DatasetObject | None):
         if trainset is None:
@@ -60,9 +77,19 @@ class LinearModel(ModelObject):
 
         with seed_context(self._seed):
             X, labels, output_dim = self.extract_training_data(trainset)
+            if self._output_activation_name == "sigmoid":
+                if len(self.get_class_to_index()) != 2:
+                    raise ValueError(
+                        "LinearModel output_activation='sigmoid' supports binary classification only"
+                    )
+                network_output_dim = 1
+            else:
+                network_output_dim = output_dim
             input_dim = X.shape[1]
-            self._output_dim = output_dim
-            self._model = torch.nn.Linear(input_dim, output_dim).to(self._device)
+            self._output_dim = network_output_dim
+            self._model = self._build_model(input_dim, network_output_dim).to(
+                self._device
+            )
 
             if (
                 self._pretrained_path is not None
@@ -79,11 +106,15 @@ class LinearModel(ModelObject):
             optimizer = build_optimizer(
                 self._optimizer_name, self._model.parameters(), self._learning_rate
             )
-            criterion = torch.nn.CrossEntropyLoss()
             X_tensor = torch.tensor(
                 X.to_numpy(dtype="float32"), dtype=torch.float32, device=self._device
             )
-            y_tensor = labels.to(self._device)
+            if self._criterion_name == "cross_entropy":
+                criterion = torch.nn.CrossEntropyLoss()
+                y_tensor = labels.to(self._device)
+            else:
+                criterion = torch.nn.BCELoss()
+                y_tensor = labels.to(self._device).to(dtype=torch.float32).unsqueeze(1)
 
             self._model.train()
             for _ in tqdm(range(self._epochs), desc="linear-fit", leave=False):
@@ -94,7 +125,12 @@ class LinearModel(ModelObject):
                     batch_y = y_tensor[batch_indices]
                     optimizer.zero_grad()
                     logits = self._model(batch_X)
-                    loss = criterion(logits, batch_y)
+                    loss_input = (
+                        torch.sigmoid(logits)
+                        if self._criterion_name == "bce"
+                        else logits
+                    )
+                    loss = criterion(loss_input, batch_y)
                     loss.backward()
                     optimizer.step()
 
@@ -113,7 +149,11 @@ class LinearModel(ModelObject):
             )
             with torch.no_grad():
                 logits = self._model(X_tensor)
-                prediction = logits_to_prediction(logits, proba=proba)
+                prediction = logits_to_prediction(
+                    logits,
+                    proba=proba,
+                    output_activation=self._output_activation_name,
+                )
             return prediction.detach().cpu()
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
@@ -121,4 +161,9 @@ class LinearModel(ModelObject):
             raise RuntimeError("Target model is not trained")
         with seed_context(self._seed):
             self._model.eval()
-            return self._model(X.to(self._device))
+            logits = self._model(X.to(self._device))
+            if self._output_activation_name == "sigmoid":
+                if logits.ndim == 1:
+                    logits = logits.unsqueeze(1)
+                return torch.cat([-logits, logits], dim=1)
+            return logits
