@@ -19,6 +19,12 @@ from utils.seed import seed_context
 @register("encode")
 class EncodePreProcess(PreProcessObject):
     @staticmethod
+    def _format_category_suffix(category: object) -> str:
+        if isinstance(category, float) and category.is_integer():
+            return str(int(category))
+        return str(category)
+
+    @staticmethod
     def _resolve_encoding(encoding: str | None) -> str | None:
         if encoding is None:
             return None
@@ -90,24 +96,25 @@ class EncodePreProcess(PreProcessObject):
 
     @staticmethod
     def _build_onehot(series: pd.Series, feature_name: str) -> pd.DataFrame:
-        categories = list(pd.Index(series.dropna().unique()))
+        categories = sorted(pd.Index(series.dropna().unique()).tolist())
         categorical = pd.Categorical(series, categories=categories, ordered=True)
         encoded = pd.get_dummies(categorical, dtype="float64")
         encoded.index = series.index
         encoded.columns = [
-            f"{feature_name}_cat_{index}" for index in range(1, encoded.shape[1] + 1)
+            f"{feature_name}_cat_{EncodePreProcess._format_category_suffix(category)}"
+            for category in categories
         ]
         return encoded
 
     @staticmethod
     def _build_thermometer(series: pd.Series, feature_name: str) -> pd.DataFrame:
-        categories = list(pd.Index(series.dropna().unique()))
+        categories = sorted(pd.Index(series.dropna().unique()).tolist())
         categorical = pd.Categorical(series, categories=categories, ordered=True)
         codes = pd.Series(categorical.codes, index=series.index)
 
         encoded_columns: dict[str, pd.Series] = {}
-        for index in range(len(categories)):
-            column_name = f"{feature_name}_cat_{index + 1}"
+        for index, category in enumerate(categories):
+            column_name = f"{feature_name}_cat_{EncodePreProcess._format_category_suffix(category)}"
             encoded_columns[column_name] = (codes >= index).astype("float64")
         return pd.DataFrame(encoded_columns, index=series.index)
 
