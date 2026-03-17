@@ -1,0 +1,26 @@
+name: german
+target_column: credit_risk
+feature_order:
+  - duration
+  - amount
+  - age
+  - personal_status_sex
+  - credit_risk
+raw_feature_type:
+  duration: numerical
+  amount: numerical
+  age: numerical
+  personal_status_sex: categorical
+  credit_risk: binary
+raw_feature_mutability:
+  duration: true
+  amount: true
+  age: true
+  personal_status_sex: true
+  credit_risk: false
+raw_feature_actionability:
+  duration: same-or-increase
+  amount: same-or-increase
+  age: same-or-increase
+  personal_status_sex: any
+  credit_risk: none
