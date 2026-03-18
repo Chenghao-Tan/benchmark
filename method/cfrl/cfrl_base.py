@@ -153,8 +153,7 @@ class ReplayBuffer:
     """
     Circular experience replay buffer for `CounterfactualRL` (DDPG). When the buffer is filled, then the oldest
     experience is replaced by the new one (FIFO). The experience batch size is kept constant and inferred when
-    the first batch of data is stored. Allowing flexible batch size can generate `tensorflow` warning due to
-    the `tf.function` retracing, which can lead to a drop in performance.
+    the first batch of data is stored.
     """
 
     X: np.ndarray  #: Inputs buffer.
@@ -389,15 +388,13 @@ Default Counterfactual with Reinforcement Learning parameters.
 
     - ``'callbacks'`` : ``List[Callback]`` - list of callback functions applied at the end of each training step.
 
-    - ``'actor'`` : ``Optional[Union[tensorflow.keras.Model, torch.nn.Module]]`` - actor network.
+    - ``'actor'`` : ``Optional[torch.nn.Module]`` - actor network.
 
-    - ``'critic;`` : ``Optional[Union[tensorflow.keras.Model, torch.nn.Module]]`` - critic network.
+    - ``'critic;`` : ``Optional[torch.nn.Module]`` - critic network.
 
-    - ``'optimizer_actor'`` : ``Optional[Union[tensorflow.keras.optimizers.Optimizer, torch.optim.Optimizer]]`` - \
-    actor optimizer.
+    - ``'optimizer_actor'`` : ``Optional[torch.optim.Optimizer]`` - actor optimizer.
 
-    - ``'optimizer_critic'`` : ``Optional[Union[tensorflow.keras.optimizer.Optimizer, torch.optim.Optimizer]]`` - \
-    critic optimizer.
+    - ``'optimizer_critic'`` : ``Optional[torch.optim.Optimizer]`` - critic optimizer.
 
     - ``'lr_actor'`` : ``float`` - actor learning rate.
 
@@ -1043,9 +1040,8 @@ class Postprocessing(ABC):
         X_cf
            Counterfactual instance. The datatype depends on the output of the decoder. For example, for an image
            dataset, the output is ``np.ndarray``. For a tabular dataset, the output is ``List[np.ndarray]`` where each
-           element of the list corresponds to a feature. This corresponds to the decoder's output from the
-           heterogeneous autoencoder (see :py:class:`alibi.models.tensorflow.autoencoder.HeAE` and
-           :py:class:`alibi.models.pytorch.autoencoder.HeAE`).
+           element of the list corresponds to a feature. This corresponds to the decoder's output from a
+           heterogeneous autoencoder implementation.
         X
            Input instance.
         C

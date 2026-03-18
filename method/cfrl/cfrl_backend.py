@@ -414,7 +414,7 @@ def data_generator(
     **kwargs,
 ):
     """
-    Constructs a tensorflow data generator.
+    Constructs a data generator for CFRL training.
 
     Parameters
     ----------
