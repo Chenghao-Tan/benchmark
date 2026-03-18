@@ -43,11 +43,6 @@ class GreedyMethod(MethodObject):
             self._desired_class, (int, str)
         ):
             raise TypeError("desired_class must be int, str, or None")
-        if (
-            self._desired_class is not None
-            and self._desired_class not in self._target_model.get_class_to_index()
-        ):
-            raise ValueError("desired_class is invalid")
         if self._device != self._target_model._device:
             raise ValueError("Method device must match target model device")
         if not self._target_model._need_grad:
@@ -103,6 +98,11 @@ class GreedyMethod(MethodObject):
                     "GreedyMethod requires a target model with at least two classes"
                 )
             class_to_index = self._target_model.get_class_to_index()
+            if (
+                self._desired_class is not None
+                and self._desired_class not in class_to_index
+            ):
+                raise ValueError("desired_class is invalid")
             if self._desired_class is not None and output.shape[1] != len(
                 class_to_index
             ):
