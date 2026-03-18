@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import pandas as pd
 
@@ -20,7 +18,11 @@ from utils.seed import seed_context
 class EncodePreProcess(PreProcessObject):
     @staticmethod
     def _format_category_suffix(category: object) -> str:
-        if isinstance(category, float) and category.is_integer():
+        if isinstance(category, (bool, np.bool_)):
+            return str(int(category))
+        if isinstance(category, (int, np.integer)):
+            return str(int(category))
+        if isinstance(category, (float, np.floating)) and float(category).is_integer():
             return str(int(category))
         return str(category)
 
@@ -37,34 +39,40 @@ class EncodePreProcess(PreProcessObject):
         return encoding
 
     @staticmethod
-    def _resolve_filter(filter: list[str] | None) -> list[str] | None:
-        if filter is None:
+    def _resolve_override(
+        override: dict[str, str] | None,
+    ) -> dict[str, str] | None:
+        if override is None:
             return None
-        if not isinstance(filter, list):
-            raise TypeError("EncodePreProcess filter must be a list[str] or None")
+        if not isinstance(override, dict):
+            raise TypeError(
+                "EncodePreProcess override must be a dict[str, str] or None"
+            )
 
-        resolved_filter: list[str] = []
-        seen: set[str] = set()
-        for feature_name in filter:
+        resolved_override: dict[str, str] = {}
+        for feature_name, mode in override.items():
             if not isinstance(feature_name, str):
                 raise TypeError(
-                    "EncodePreProcess filter must contain str feature names only"
+                    "EncodePreProcess override keys must be str feature names only"
                 )
-            if feature_name in seen:
-                raise ValueError(
-                    f"EncodePreProcess filter contains duplicated feature: {feature_name}"
+            if not isinstance(mode, str):
+                raise TypeError(
+                    "EncodePreProcess override values must be str encoding modes only"
                 )
-            seen.add(feature_name)
-            resolved_filter.append(feature_name)
-        return resolved_filter
+            resolved_mode = EncodePreProcess._resolve_encoding(mode)
+            if resolved_mode is None:
+                raise ValueError("EncodePreProcess override values must not be None")
+            resolved_override[feature_name] = resolved_mode
+        return resolved_override
 
     @staticmethod
-    def _resolve_encode_columns(
+    def _resolve_encode_modes(
         df: pd.DataFrame,
         target_column: str,
         raw_feature_type: dict[str, str],
-        filter: list[str] | None,
-    ) -> list[str]:
+        default_mode: str,
+        override: dict[str, str] | None,
+    ) -> dict[str, str]:
         categorical_columns = []
         for column in df.columns:
             if column == target_column:
@@ -72,27 +80,43 @@ class EncodePreProcess(PreProcessObject):
             if raw_feature_type.get(column, "").lower() == "categorical":
                 categorical_columns.append(column)
 
-        if filter is None:
-            return categorical_columns
-        if len(filter) == 0:
-            return categorical_columns
+        resolved_modes = {column: default_mode for column in categorical_columns}
+        if override is None:
+            return resolved_modes
 
-        selected_columns: list[str] = []
-        for feature_name in filter:
+        for feature_name, mode in override.items():
             if feature_name == target_column:
                 raise ValueError(
-                    "EncodePreProcess filter must not contain the target feature"
+                    "EncodePreProcess override must not contain the target feature"
                 )
             if feature_name not in df.columns:
                 raise ValueError(
-                    f"EncodePreProcess filter contains unknown feature: {feature_name}"
+                    f"EncodePreProcess override contains unknown feature: {feature_name}"
                 )
             if raw_feature_type.get(feature_name, "").lower() != "categorical":
                 raise ValueError(
-                    f"EncodePreProcess filter contains non-categorical feature: {feature_name}"
+                    "EncodePreProcess override contains non-categorical feature: "
+                    f"{feature_name}"
                 )
-            selected_columns.append(feature_name)
-        return selected_columns
+            resolved_modes[feature_name] = mode
+        return resolved_modes
+
+    @staticmethod
+    def _ensure_output_columns_available(
+        new_columns: list[str],
+        seen_columns: set[str],
+        remaining_columns: set[str],
+    ) -> None:
+        for column in new_columns:
+            if column in seen_columns:
+                raise ValueError(
+                    f"EncodePreProcess generated duplicated column: {column}"
+                )
+            if column in remaining_columns:
+                raise ValueError(
+                    "EncodePreProcess generated column collides with existing column: "
+                    f"{column}"
+                )
 
     @staticmethod
     def _build_onehot(series: pd.Series, feature_name: str) -> pd.DataFrame:
@@ -114,7 +138,10 @@ class EncodePreProcess(PreProcessObject):
 
         encoded_columns: dict[str, pd.Series] = {}
         for index, category in enumerate(categories):
-            column_name = f"{feature_name}_cat_{EncodePreProcess._format_category_suffix(category)}"
+            column_name = (
+                f"{feature_name}_therm_"
+                f"{EncodePreProcess._format_category_suffix(category)}"
+            )
             encoded_columns[column_name] = (codes >= index).astype("float64")
         return pd.DataFrame(encoded_columns, index=series.index)
 
@@ -161,12 +188,12 @@ class EncodePreProcess(PreProcessObject):
         self,
         seed: int | None = None,
         encoding: str | None = "onehot",
-        filter: list[str] | None = None,
+        override: dict[str, str] | None = None,
         **kwargs,
     ):
         self._seed = seed
         self._encoding: str | None = self._resolve_encoding(encoding)
-        self._filter: list[str] | None = self._resolve_filter(filter)
+        self._override: dict[str, str] | None = self._resolve_override(override)
 
     def transform(self, input: DatasetObject) -> DatasetObject:
         with seed_context(self._seed):
@@ -174,39 +201,77 @@ class EncodePreProcess(PreProcessObject):
 
             if self._encoding is None:
                 return input
-            if self._encoding == "none":
-                return input
 
             df = input.snapshot()
             target_column = input.target_column
 
             raw_feature_type = input.attr("raw_feature_type")
-            selected_columns = self._resolve_encode_columns(
+            selected_modes = self._resolve_encode_modes(
                 df=df,
                 target_column=target_column,
                 raw_feature_type=raw_feature_type,
-                filter=self._filter,
+                default_mode=self._encoding,
+                override=self._override,
             )
 
             final_parts: list[pd.DataFrame] = []
             encoded_sources: dict[str, str] = {}
+            encoding_map: dict[str, list[str]] = {}
+            seen_columns: set[str] = set()
+            remaining_columns = set(df.columns)
             for column in df.columns:
+                remaining_columns.discard(column)
+
                 if column == target_column:
-                    final_parts.append(df.loc[:, [column]].copy(deep=True))
-                elif column not in selected_columns:
-                    final_parts.append(df.loc[:, [column]].copy(deep=True))
-                elif self._encoding == "onehot":
-                    encoded = self._build_onehot(df[column], column)
-                    final_parts.append(encoded)
-                    for encoded_column in encoded.columns:
-                        encoded_sources[encoded_column] = column
-                elif self._encoding == "thermometer":
-                    encoded = self._build_thermometer(df[column], column)
-                    final_parts.append(encoded)
-                    for encoded_column in encoded.columns:
-                        encoded_sources[encoded_column] = column
+                    passthrough = df.loc[:, [column]].copy(deep=True)
+                    self._ensure_output_columns_available(
+                        [column], seen_columns, remaining_columns
+                    )
+                    final_parts.append(passthrough)
+                    seen_columns.add(column)
+                elif column not in selected_modes:
+                    passthrough = df.loc[:, [column]].copy(deep=True)
+                    self._ensure_output_columns_available(
+                        [column], seen_columns, remaining_columns
+                    )
+                    final_parts.append(passthrough)
+                    seen_columns.add(column)
                 else:
-                    raise ValueError(f"Unsupported encoding option: {self._encoding}")
+                    mode = selected_modes[column]
+                    if mode == "onehot":
+                        encoded = self._build_onehot(df[column], column)
+                        new_columns = list(encoded.columns)
+                        self._ensure_output_columns_available(
+                            new_columns, seen_columns, remaining_columns
+                        )
+                        final_parts.append(encoded)
+                        encoding_map[column] = new_columns
+                        seen_columns.update(new_columns)
+                        for encoded_column in new_columns:
+                            encoded_sources[encoded_column] = column
+                    elif mode == "thermometer":
+                        encoded = self._build_thermometer(df[column], column)
+                        new_columns = list(encoded.columns)
+                        self._ensure_output_columns_available(
+                            new_columns, seen_columns, remaining_columns
+                        )
+                        final_parts.append(encoded)
+                        encoding_map[column] = new_columns
+                        seen_columns.update(new_columns)
+                        for encoded_column in new_columns:
+                            encoded_sources[encoded_column] = column
+                    elif mode == "none":
+                        passthrough = df.loc[:, [column]].copy(deep=True)
+                        self._ensure_output_columns_available(
+                            [column], seen_columns, remaining_columns
+                        )
+                        final_parts.append(passthrough)
+                        encoding_map[column] = [column]
+                        seen_columns.add(column)
+                    else:
+                        raise ValueError(
+                            f"Unsupported encoding option for feature {column}: {mode}"
+                        )
 
             final_df = pd.concat(final_parts, axis=1)
             (
@@ -219,7 +284,7 @@ class EncodePreProcess(PreProcessObject):
                 encoded_sources=encoded_sources,
             )
 
-            input.update("encoding", self._encoding, df=final_df)
+            input.update("encoding", encoding_map, df=final_df)
             input.update("encoded_feature_type", encoded_feature_type)
             input.update("encoded_feature_mutability", encoded_feature_mutability)
             input.update("encoded_feature_actionability", encoded_feature_actionability)
@@ -241,34 +306,38 @@ class ScalePreProcess(PreProcessObject):
         return scaling
 
     @staticmethod
-    def _resolve_filter(filter: list[str] | None) -> list[str] | None:
-        if filter is None:
+    def _resolve_override(
+        override: dict[str, str] | None,
+    ) -> dict[str, str] | None:
+        if override is None:
             return None
-        if not isinstance(filter, list):
-            raise TypeError("ScalePreProcess filter must be a list[str] or None")
+        if not isinstance(override, dict):
+            raise TypeError("ScalePreProcess override must be a dict[str, str] or None")
 
-        resolved_filter: list[str] = []
-        seen: set[str] = set()
-        for feature_name in filter:
+        resolved_override: dict[str, str] = {}
+        for feature_name, mode in override.items():
             if not isinstance(feature_name, str):
                 raise TypeError(
-                    "ScalePreProcess filter must contain str feature names only"
+                    "ScalePreProcess override keys must be str feature names only"
                 )
-            if feature_name in seen:
-                raise ValueError(
-                    f"ScalePreProcess filter contains duplicated feature: {feature_name}"
+            if not isinstance(mode, str):
+                raise TypeError(
+                    "ScalePreProcess override values must be str scaling modes only"
                 )
-            seen.add(feature_name)
-            resolved_filter.append(feature_name)
-        return resolved_filter
+            resolved_mode = ScalePreProcess._resolve_scaling(mode)
+            if resolved_mode is None:
+                raise ValueError("ScalePreProcess override values must not be None")
+            resolved_override[feature_name] = resolved_mode
+        return resolved_override
 
     @staticmethod
-    def _resolve_scale_columns(
+    def _resolve_scale_modes(
         df: pd.DataFrame,
         target_column: str,
         feature_type: dict[str, str],
-        filter: list[str] | None,
-    ) -> list[str]:
+        default_mode: str,
+        override: dict[str, str] | None,
+    ) -> dict[str, str]:
         numerical_columns = []
         for column in df.columns:
             if column == target_column:
@@ -276,27 +345,26 @@ class ScalePreProcess(PreProcessObject):
             if feature_type.get(column, "").lower() == "numerical":
                 numerical_columns.append(column)
 
-        if filter is None:
-            return numerical_columns
-        if len(filter) == 0:
-            return numerical_columns
+        resolved_modes = {column: default_mode for column in numerical_columns}
+        if override is None:
+            return resolved_modes
 
-        selected_columns: list[str] = []
-        for feature_name in filter:
+        for feature_name, mode in override.items():
             if feature_name == target_column:
                 raise ValueError(
-                    "ScalePreProcess filter must not contain the target feature"
+                    "ScalePreProcess override must not contain the target feature"
                 )
             if feature_name not in df.columns:
                 raise ValueError(
-                    f"ScalePreProcess filter contains unknown feature: {feature_name}"
+                    f"ScalePreProcess override contains unknown feature: {feature_name}"
                 )
             if feature_type.get(feature_name, "").lower() != "numerical":
                 raise ValueError(
-                    f"ScalePreProcess filter contains non-numerical feature: {feature_name}"
+                    "ScalePreProcess override contains non-numerical feature: "
+                    f"{feature_name}"
                 )
-            selected_columns.append(feature_name)
-        return selected_columns
+            resolved_modes[feature_name] = mode
+        return resolved_modes
 
     @staticmethod
     def _compute_feature_ranges(
@@ -314,13 +382,13 @@ class ScalePreProcess(PreProcessObject):
         self,
         seed: int | None = None,
         scaling: str | None = "standardize",
-        filter: list[str] | None = None,
+        override: dict[str, str] | None = None,
         range: bool = True,
         **kwargs,
     ):
         self._seed = seed
         self._scaling: str | None = self._resolve_scaling(scaling)
-        self._filter: list[str] | None = self._resolve_filter(filter)
+        self._override: dict[str, str] | None = self._resolve_override(override)
         self._range: bool = range
 
     def transform(self, input: DatasetObject) -> DatasetObject:
@@ -342,28 +410,27 @@ class ScalePreProcess(PreProcessObject):
 
             if self._scaling is None:
                 return input
-            if self._scaling == "none":
-                return input
 
-            selected_columns = self._resolve_scale_columns(
+            selected_modes = self._resolve_scale_modes(
                 df=df,
                 target_column=target_column,
                 feature_type=feature_type,
-                filter=self._filter,
+                default_mode=self._scaling,
+                override=self._override,
             )
 
             scaled_df = df.copy(deep=True)
-            for column in selected_columns:
+            for column, mode in selected_modes.items():
                 series = scaled_df[column].astype("float64")
 
-                if self._scaling == "standardize":
+                if mode == "standardize":
                     mean_value = float(series.mean())
                     std_value = float(series.std(ddof=0))
                     if std_value == 0.0:
                         scaled_df[column] = 0.0
                     else:
                         scaled_df[column] = (series - mean_value) / std_value
-                elif self._scaling == "normalize":
+                elif mode == "normalize":
                     min_value = float(series.min())
                     max_value = float(series.max())
                     scale_value = max_value - min_value
@@ -371,10 +438,14 @@ class ScalePreProcess(PreProcessObject):
                         scaled_df[column] = 0.0
                     else:
                         scaled_df[column] = (series - min_value) / scale_value
+                elif mode == "none":
+                    continue
                 else:
-                    raise ValueError(f"Unsupported scaling option: {self._scaling}")
+                    raise ValueError(
+                        f"Unsupported scaling option for feature {column}: {mode}"
+                    )
 
-            input.update("scaling", self._scaling, df=scaled_df)
+            input.update("scaling", selected_modes, df=scaled_df)
             return input
 
 
