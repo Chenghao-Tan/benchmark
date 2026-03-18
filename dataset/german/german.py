@@ -16,22 +16,7 @@ class GermanDataset(DatasetObject):
             dataset_path = Path(__file__).resolve().parent
 
         self._rawdf = self._read_df(str(dataset_path))
-        self._rawdf = self._rawdf.sample(frac=1.0, random_state=1).reset_index(
-            drop=True
-        )
         self._freeze = False
-
-        for column in self._rawdf.columns:
-            if not self._rawdf[column].isna().any():
-                continue
-            if pd.api.types.is_numeric_dtype(self._rawdf[column]):
-                self._rawdf[column] = self._rawdf[column].fillna(
-                    self._rawdf[column].median()
-                )
-            else:
-                self._rawdf[column] = self._rawdf[column].fillna(
-                    self._rawdf[column].mode().iloc[0]
-                )
 
         rawattrs = self._read_attrs(str(dataset_path))
         for flag, value in rawattrs.items():
