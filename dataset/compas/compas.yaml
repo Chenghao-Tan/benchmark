@@ -1,0 +1,30 @@
+name: compas
+target_column: TwoYearRecid (label)
+feature_order:
+- AgeGroup
+- Race
+- Sex
+- PriorsCount
+- ChargeDegree
+- TwoYearRecid (label)
+raw_feature_type:
+  AgeGroup: categorical
+  Race: binary
+  Sex: binary
+  PriorsCount: numerical
+  ChargeDegree: binary
+  TwoYearRecid (label): binary
+raw_feature_mutability:
+  AgeGroup: false
+  Race: false
+  Sex: false
+  PriorsCount: true
+  ChargeDegree: true
+  TwoYearRecid (label): false
+raw_feature_actionability:
+  AgeGroup: none
+  Race: none
+  Sex: none
+  PriorsCount: any
+  ChargeDegree: any
+  TwoYearRecid (label): none

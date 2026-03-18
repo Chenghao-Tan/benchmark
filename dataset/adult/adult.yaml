@@ -1,0 +1,58 @@
+name: adult
+target_column: Label
+feature_order:
+- Sex
+- Age
+- NativeCountry
+- WorkClass
+- EducationNumber
+- EducationLevel
+- MaritalStatus
+- Occupation
+- Relationship
+- CapitalGain
+- CapitalLoss
+- HoursPerWeek
+- Label
+raw_feature_type:
+  Sex: binary
+  Age: numerical
+  NativeCountry: binary
+  WorkClass: categorical
+  EducationNumber: numerical
+  EducationLevel: categorical
+  MaritalStatus: categorical
+  Occupation: categorical
+  Relationship: categorical
+  CapitalGain: numerical
+  CapitalLoss: numerical
+  HoursPerWeek: numerical
+  Label: binary
+raw_feature_mutability:
+  Sex: false
+  Age: false
+  NativeCountry: true
+  WorkClass: true
+  EducationNumber: true
+  EducationLevel: true
+  MaritalStatus: true
+  Occupation: true
+  Relationship: true
+  CapitalGain: true
+  CapitalLoss: true
+  HoursPerWeek: true
+  Label: false
+raw_feature_actionability:
+  Sex: none
+  Age: none
+  NativeCountry: any
+  WorkClass: any
+  EducationNumber: any
+  EducationLevel: any
+  MaritalStatus: any
+  Occupation: any
+  Relationship: any
+  CapitalGain: any
+  CapitalLoss: any
+  HoursPerWeek: any
+  Label: none

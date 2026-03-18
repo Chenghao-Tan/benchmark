@@ -1,0 +1,62 @@
+name: boston_housing
+target_column: target (label)
+feature_order:
+- CRIM
+- ZN
+- INDUS
+- CHAS
+- NOX
+- RM
+- AGE
+- DIS
+- RAD
+- TAX
+- PTRATIO
+- B
+- LSTAT
+- target (label)
+raw_feature_type:
+  CRIM: numerical
+  ZN: numerical
+  INDUS: numerical
+  CHAS: binary
+  NOX: numerical
+  RM: numerical
+  AGE: numerical
+  DIS: numerical
+  RAD: categorical
+  TAX: numerical
+  PTRATIO: numerical
+  B: numerical
+  LSTAT: numerical
+  target (label): binary
+raw_feature_mutability:
+  CRIM: true
+  ZN: true
+  INDUS: true
+  CHAS: true
+  NOX: true
+  RM: true
+  AGE: true
+  DIS: true
+  RAD: true
+  TAX: true
+  PTRATIO: true
+  B: true
+  LSTAT: true
+  target (label): false
+raw_feature_actionability:
+  CRIM: any
+  ZN: any
+  INDUS: any
+  CHAS: any
+  NOX: any
+  RM: any
+  AGE: any
+  DIS: any
+  RAD: any
+  TAX: any
+  PTRATIO: any
+  B: any
+  LSTAT: any
+  target (label): none

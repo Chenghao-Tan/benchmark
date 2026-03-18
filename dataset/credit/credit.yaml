@@ -1,0 +1,66 @@
+name: credit
+target_column: NoDefaultNextMonth (label)
+feature_order:
+- isMale
+- isMarried
+- AgeGroup
+- EducationLevel
+- MaxBillAmountOverLast6Months
+- MaxPaymentAmountOverLast6Months
+- MonthsWithZeroBalanceOverLast6Months
+- MonthsWithLowSpendingOverLast6Months
+- MonthsWithHighSpendingOverLast6Months
+- MostRecentBillAmount
+- MostRecentPaymentAmount
+- TotalOverdueCounts
+- TotalMonthsOverdue
+- HasHistoryOfOverduePayments
+- NoDefaultNextMonth (label)
+raw_feature_type:
+  isMale: binary
+  isMarried: binary
+  AgeGroup: categorical
+  EducationLevel: categorical
+  MaxBillAmountOverLast6Months: numerical
+  MaxPaymentAmountOverLast6Months: numerical
+  MonthsWithZeroBalanceOverLast6Months: numerical
+  MonthsWithLowSpendingOverLast6Months: numerical
+  MonthsWithHighSpendingOverLast6Months: numerical
+  MostRecentBillAmount: numerical
+  MostRecentPaymentAmount: numerical
+  TotalOverdueCounts: numerical
+  TotalMonthsOverdue: numerical
+  HasHistoryOfOverduePayments: binary
+  NoDefaultNextMonth (label): binary
+raw_feature_mutability:
+  isMale: false
+  isMarried: true
+  AgeGroup: false
+  EducationLevel: true
+  MaxBillAmountOverLast6Months: true
+  MaxPaymentAmountOverLast6Months: true
+  MonthsWithZeroBalanceOverLast6Months: true
+  MonthsWithLowSpendingOverLast6Months: true
+  MonthsWithHighSpendingOverLast6Months: true
+  MostRecentBillAmount: true
+  MostRecentPaymentAmount: true
+  TotalOverdueCounts: true
+  TotalMonthsOverdue: true
+  HasHistoryOfOverduePayments: true
+  NoDefaultNextMonth (label): false
+raw_feature_actionability:
+  isMale: none
+  isMarried: any
+  AgeGroup: none
+  EducationLevel: any
+  MaxBillAmountOverLast6Months: any
+  MaxPaymentAmountOverLast6Months: any
+  MonthsWithZeroBalanceOverLast6Months: any
+  MonthsWithLowSpendingOverLast6Months: any
+  MonthsWithHighSpendingOverLast6Months: any
+  MostRecentBillAmount: any
+  MostRecentPaymentAmount: any
+  TotalOverdueCounts: any
+  TotalMonthsOverdue: any
+  HasHistoryOfOverduePayments: any
+  NoDefaultNextMonth (label): none

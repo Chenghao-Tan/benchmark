@@ -1,0 +1,130 @@
+name: breast_cancer
+target_column: target (label)
+feature_order:
+- mean radius
+- mean texture
+- mean perimeter
+- mean area
+- mean smoothness
+- mean compactness
+- mean concavity
+- mean concave points
+- mean symmetry
+- mean fractal dimension
+- radius error
+- texture error
+- perimeter error
+- area error
+- smoothness error
+- compactness error
+- concavity error
+- concave points error
+- symmetry error
+- fractal dimension error
+- worst radius
+- worst texture
+- worst perimeter
+- worst area
+- worst smoothness
+- worst compactness
+- worst concavity
+- worst concave points
+- worst symmetry
+- worst fractal dimension
+- target (label)
+raw_feature_type:
+  mean radius: numerical
+  mean texture: numerical
+  mean perimeter: numerical
+  mean area: numerical
+  mean smoothness: numerical
+  mean compactness: numerical
+  mean concavity: numerical
+  mean concave points: numerical
+  mean symmetry: numerical
+  mean fractal dimension: numerical
+  radius error: numerical
+  texture error: numerical
+  perimeter error: numerical
+  area error: numerical
+  smoothness error: numerical
+  compactness error: numerical
+  concavity error: numerical
+  concave points error: numerical
+  symmetry error: numerical
+  fractal dimension error: numerical
+  worst radius: numerical
+  worst texture: numerical
+  worst perimeter: numerical
+  worst area: numerical
+  worst smoothness: numerical
+  worst compactness: numerical
+  worst concavity: numerical
+  worst concave points: numerical
+  worst symmetry: numerical
+  worst fractal dimension: numerical
+  target (label): binary
+raw_feature_mutability:
+  mean radius: true
+  mean texture: true
+  mean perimeter: true
+  mean area: true
+  mean smoothness: true
+  mean compactness: true
+  mean concavity: true
+  mean concave points: true
+  mean symmetry: true
+  mean fractal dimension: true
+  radius error: true
+  texture error: true
+  perimeter error: true
+  area error: true
+  smoothness error: true
+  compactness error: true
+  concavity error: true
+  concave points error: true
+  symmetry error: true
+  fractal dimension error: true
+  worst radius: true
+  worst texture: true
+  worst perimeter: true
+  worst area: true
+  worst smoothness: true
+  worst compactness: true
+  worst concavity: true
+  worst concave points: true
+  worst symmetry: true
+  worst fractal dimension: true
+  target (label): false
+raw_feature_actionability:
+  mean radius: any
+  mean texture: any
+  mean perimeter: any
+  mean area: any
+  mean smoothness: any
+  mean compactness: any
+  mean concavity: any
+  mean concave points: any
+  mean symmetry: any
+  mean fractal dimension: any
+  radius error: any
+  texture error: any
+  perimeter error: any
+  area error: any
+  smoothness error: any
+  compactness error: any
+  concavity error: any
+  concave points error: any
+  symmetry error: any
+  fractal dimension error: any
+  worst radius: any
+  worst texture: any
+  worst perimeter: any
+  worst area: any
+  worst smoothness: any
+  worst compactness: any
+  worst concavity: any
+  worst concave points: any
+  worst symmetry: any
+  worst fractal dimension: any
+  target (label): none
