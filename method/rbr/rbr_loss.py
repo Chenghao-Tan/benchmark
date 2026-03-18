@@ -167,16 +167,22 @@ class RBRLoss(torch.nn.Module):
         )
 
     def forward(self, x: torch.Tensor):
-        if self.X_feas_pos.shape[0] == 0 or self.X_feas_neg.shape[0] == 0:
-            F = torch.linalg.norm(self.X_feas - x, ord=2, axis=-1)
-            return F, F, F
+        if self.X_feas_pos.shape[0] > 0:
+            x_pos = x.unsqueeze(0).expand(self.X_feas_pos.shape[0], -1)
+            u = self.pe.optimize(x_pos, self.X_feas_pos)
+            F_pe, _ = self.pe.forward(u, x_pos, self.X_feas_pos)
+            denom = torch.logsumexp(F_pe, dim=-1)
+        else:
+            denom = torch.tensor(0.0, device=self.device)
 
-        x_pos = x.unsqueeze(0).expand(self.X_feas_pos.shape[0], -1)
-        x_neg = x.unsqueeze(0).expand(self.X_feas_neg.shape[0], -1)
-        v = self.op.optimize(x_pos, self.X_feas_pos)
-        u = self.pe.optimize(x_neg, self.X_feas_neg)
-        numer, _ = self.op.forward(v, x_pos, self.X_feas_pos)
-        denom, _ = self.pe.forward(u, x_neg, self.X_feas_neg)
+        if self.X_feas_neg.shape[0] > 0:
+            x_neg = x.unsqueeze(0).expand(self.X_feas_neg.shape[0], -1)
+            v = self.op.optimize(x_neg, self.X_feas_neg)
+            F_op, _ = self.op.forward(v, x_neg, self.X_feas_neg)
+            numer = torch.logsumexp(-F_op, dim=-1)
+        else:
+            numer = torch.tensor(0.0, device=self.device)
+
         F = numer - denom
         return F, denom, numer
 
