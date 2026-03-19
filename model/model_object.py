@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from functools import wraps
 
+import numpy as np
 import pandas as pd
 import torch
 from sklearn.ensemble import RandomForestClassifier
@@ -96,7 +97,14 @@ class ModelObject(ABC):
 
             if all(isinstance(value, str) for value in unique_values):
                 sorted_values = sorted(unique_values)
-            elif all(isinstance(value, int) for value in unique_values):
+            elif all(
+                isinstance(value, (int, np.integer))
+                or (
+                    isinstance(value, (float, np.floating))
+                    and float(value).is_integer()
+                )
+                for value in unique_values
+            ):
                 target = target.map(int)
                 sorted_values = sorted(pd.Index(target.unique()).tolist())
             else:
