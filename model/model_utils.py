@@ -59,6 +59,8 @@ def build_optimizer(optimizer_name: str, parameters, learning_rate: float):
         return torch.optim.Adam(parameters, lr=learning_rate)
     if optimizer_name == "sgd":
         return torch.optim.SGD(parameters, lr=learning_rate)
+    if optimizer_name in {"rms", "rmsprop"}:
+        return torch.optim.RMSprop(parameters, lr=learning_rate)
     raise ValueError(f"Unsupported optimizer: {optimizer_name}")
 
 
