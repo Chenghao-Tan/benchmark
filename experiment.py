@@ -151,7 +151,9 @@ class Experiment:
         for cfg in self._cfg.get("evaluation", []):
             item_cfg = deepcopy(cfg)
             name = item_cfg.pop("name")
-            evaluation_objects.append(registry[name](**item_cfg))
+            evaluation_objects.append(
+                registry[name](target_model=self._target_model, **item_cfg)
+            )
         return evaluation_objects
 
     def _resolve_train_test(self, datasets: list):

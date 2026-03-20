@@ -1,0 +1,46 @@
+name: adult_cfrl_randomforest_reproduce
+logger:
+  level: INFO
+  path: ./logs/adult_cfrl_randomforest_reproduce.log
+caching:
+  path: ./cache/
+dataset:
+  name: adult_cfrl
+preprocess:
+  - name: cfrl_adult_aggregate
+    seed: 0
+  - name: encode
+    seed: 0
+    encoding: onehot
+  - name: scale
+    seed: 0
+    scaling: standardize
+    range: true
+  - name: split
+    seed: 0
+    split: 0.2
+model:
+  name: randomforest
+  seed: 0
+  device: cpu
+  n_estimators: 50
+  max_depth: 15
+  min_samples_split: 10
+method:
+  name: cfrl
+  seed: 0
+  device: cpu
+  desired_class: 1
+  autoencoder_batch_size: 128
+  autoencoder_target_steps: 100000
+  autoencoder_lr: 0.001
+  autoencoder_latent_dim: 15
+  autoencoder_hidden_dim: 128
+  coeff_sparsity: 0.5
+  coeff_consistency: 0.5
+  train_steps: 100000
+  batch_size: 128
+evaluation:
+  - name: validity
+  - name: distance
+  - name: cfrl_adult_metrics

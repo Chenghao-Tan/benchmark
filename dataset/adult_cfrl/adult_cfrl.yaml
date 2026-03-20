@@ -1,0 +1,66 @@
+name: adult_cfrl
+target_column: Target
+feature_order:
+  - Age
+  - Workclass
+  - fnlwgt
+  - Education
+  - Education-Num
+  - Marital Status
+  - Occupation
+  - Relationship
+  - Race
+  - Sex
+  - Capital Gain
+  - Capital Loss
+  - Hours per week
+  - Country
+  - Target
+raw_feature_type:
+  Age: numerical
+  Workclass: categorical
+  fnlwgt: numerical
+  Education: categorical
+  Education-Num: numerical
+  Marital Status: categorical
+  Occupation: categorical
+  Relationship: categorical
+  Race: categorical
+  Sex: categorical
+  Capital Gain: numerical
+  Capital Loss: numerical
+  Hours per week: numerical
+  Country: categorical
+  Target: binary
+raw_feature_mutability:
+  Age: true
+  Workclass: true
+  fnlwgt: true
+  Education: true
+  Education-Num: true
+  Marital Status: false
+  Occupation: true
+  Relationship: false
+  Race: false
+  Sex: false
+  Capital Gain: true
+  Capital Loss: true
+  Hours per week: true
+  Country: true
+  Target: false
+raw_feature_actionability:
+  Age: same-or-increase
+  Workclass: any
+  fnlwgt: any
+  Education: any
+  Education-Num: any
+  Marital Status: none
+  Occupation: any
+  Relationship: none
+  Race: none
+  Sex: none
+  Capital Gain: any
+  Capital Loss: any
+  Hours per week: any
+  Country: any
+  Target: none

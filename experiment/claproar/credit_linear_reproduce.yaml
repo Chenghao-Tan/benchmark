@@ -1,0 +1,41 @@
+name: credit_linear_claproar_reproduce
+logger:
+  level: INFO
+  path: ./logs/credit_linear_claproar_reproduce.log
+caching:
+  path: ./cache/
+dataset:
+  name: credit
+preprocess:
+  - name: scale
+    seed: 0
+    scaling: normalize
+    range: true
+  - name: split
+    seed: 0
+    split: 0.3
+model:
+  name: linear
+  seed: 0
+  device: cuda
+  epochs: 100
+  learning_rate: 0.01
+  batch_size: 256
+  optimizer: adam
+  criterion: cross_entropy
+  output_activation: softmax
+  save_name: credit_linear_claproar_reproduce
+method:
+  name: claproar
+  seed: 0
+  device: cuda
+  desired_class: 1
+  individual_cost_lambda: 0.1
+  external_cost_lambda: 0.1
+  learning_rate: 0.01
+  max_iter: 100
+  tol: 0.0001
+evaluation:
+  - name: validity
+  - name: distance
+  - name: claproar_credit_stats

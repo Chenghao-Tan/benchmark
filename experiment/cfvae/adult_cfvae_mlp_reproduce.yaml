@@ -1,0 +1,50 @@
+name: adult_cfvae_mlp_reproduce
+logger:
+  level: INFO
+  path: ./logs/adult_cfvae_mlp_reproduce.log
+caching:
+  path: ./cache/
+dataset:
+  name: adult_cfvae
+preprocess:
+  - name: cfvae_adult_prepare
+    seed: 0
+  - name: encode
+    seed: 0
+    encoding: onehot
+  - name: scale
+    seed: 0
+    scaling: normalize
+    range: true
+  - name: split
+    seed: 0
+    split: 0.2
+model:
+  name: mlp
+  seed: 0
+  device: cuda
+  epochs: 100
+  learning_rate: 0.001
+  batch_size: 32
+  layers: [10]
+  optimizer: adam
+  criterion: cross_entropy
+  output_activation: softmax
+  save_name: adult_cfvae_mlp_reproduce
+method:
+  name: cfvae
+  seed: 0
+  device: cuda
+  desired_class: 1
+  encoded_size: 10
+  train: true
+  batch_size: 2048
+  epoch: 50
+  learning_rate: 0.001
+  n_samples: 50
+  margin: 0.2
+  validity_reg: 20.0
+evaluation:
+  - name: validity
+  - name: distance
+  - name: cfvae_adult_feasibility

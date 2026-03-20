@@ -1,0 +1,47 @@
+name: german_current_rbr_reproduce
+logger:
+  level: INFO
+  path: ./logs/german_current_rbr_reproduce.log
+caching:
+  path: ./cache/
+dataset:
+  name: german
+preprocess:
+  - name: encode
+    seed: 42
+    encoding: onehot
+  - name: scale
+    seed: 42
+    scaling: standardize
+    range: true
+  - name: split
+    seed: 42
+    split: 0.2
+model:
+  name: mlp
+  seed: 42
+  device: cuda
+  epochs: 100
+  learning_rate: 0.001
+  batch_size: 1000
+  layers: [20, 50, 20]
+  optimizer: adam
+  criterion: bce
+  output_activation: sigmoid
+  save_name: german_current_rbr_reproduce
+method:
+  name: rbr
+  seed: 42
+  device: cuda
+  desired_class: 1
+  num_samples: 200
+  perturb_radius: 0.2
+  delta_plus: 1.0
+  sigma: 1.0
+  epsilon_op: 1.0
+  epsilon_pe: 1.0
+  max_iter: 500
+  clamp: false
+evaluation:
+  - name: validity
+  - name: distance

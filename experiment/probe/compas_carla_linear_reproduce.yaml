@@ -1,0 +1,53 @@
+name: compas_carla_linear_probe_reproduce
+logger:
+  level: INFO
+  path: ./logs/compas_carla_linear_probe_reproduce.log
+caching:
+  path: ./cache/
+dataset:
+  name: compas_carla
+preprocess:
+  - name: encode
+    seed: 42
+    encoding: onehot
+  - name: scale
+    seed: 42
+    scaling: normalize
+    range: true
+  - name: split
+    seed: 42
+    split: 0.25
+model:
+  name: linear
+  seed: 42
+  device: cuda
+  epochs: 25
+  learning_rate: 0.002
+  batch_size: 128
+  optimizer: rmsprop
+  criterion: cross_entropy
+  output_activation: softmax
+  save_name: compas_carla_linear_probe_reproduce
+method:
+  name: probe
+  seed: 42
+  device: cuda
+  desired_class: 1
+  lr: 0.001
+  lambda_: 0.01
+  n_iter: 200
+  t_max_min: 0.5
+  norm: 1
+  clamp: true
+  loss_type: BCE
+  y_target: [0.45, 0.55]
+  noise_variance: 0.01
+  invalidation_target: 0.35
+  inval_target_eps: 0.01
+evaluation:
+  - name: validity
+  - name: distance
+  - name: probe_invalidation
+    noise_variance: 0.01
+    n_samples: 10000
+    target_class: 1

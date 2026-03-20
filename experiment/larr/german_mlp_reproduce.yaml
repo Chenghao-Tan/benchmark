@@ -1,0 +1,43 @@
+name: german_mlp_larr_reproduce
+logger:
+  level: INFO
+  path: ./logs/german_mlp_larr_reproduce.log
+caching:
+  path: ./cache/
+dataset:
+  name: german
+preprocess:
+  - name: encode
+    seed: 0
+    encoding: onehot
+  - name: scale
+    seed: 0
+    scaling: standardize
+    range: true
+  - name: larr_german_fold_split
+    seed: 0
+    fold: 0
+    n_folds: 5
+model:
+  name: mlp
+  seed: 0
+  device: cuda
+  epochs: 100
+  learning_rate: 0.001
+  batch_size: 1000
+  layers: [50, 100, 200]
+  optimizer: adam
+  criterion: bce
+  output_activation: sigmoid
+  save_name: german_mlp_larr_reproduce
+method:
+  name: larr
+  seed: 0
+  device: cuda
+  desired_class: 1
+  alpha: 0.5
+  beta: 0.5
+  lime_seed: 0
+evaluation:
+  - name: validity
+  - name: distance
