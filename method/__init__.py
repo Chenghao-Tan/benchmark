@@ -1,2 +1,2 @@
-from method.greedy.greedy import GreedyMethod
 from method.method_object import MethodObject
+from method.toy.toy import ToyMethod
