@@ -1,0 +1,53 @@
+name: robust_ce_diabetes_reproduction
+logger:
+  level: WARNING
+caching:
+  path: ./experiment/robust_ce/cache/
+dataset:
+  name: diabetes
+preprocess:
+  - name: scale
+    seed: 0
+    scaling: normalize
+    range: true
+model:
+  name: mlp
+  seed: 0
+  device: cpu
+  epochs: 300
+  learning_rate: 0.001
+  batch_size: 200
+  optimizer: adam
+  criterion: bce
+  output_activation: sigmoid
+method:
+  name: robust_ce
+  seed: 0
+  device: cpu
+  rho: 0.05
+  uncertainty_norm: linf
+  objective_norm: linf
+  iterative: true
+  time_limit: 1000.0
+  max_iterations: 50
+  solver_name: gurobi
+  solver_tee: false
+  violation_tolerance: 1.0e-6
+  big_m_lower: -100.0
+  big_m_upper: 100.0
+  show_progress: true
+evaluation:
+  - name: validity
+  - name: distance
+    metrics:
+      - l1
+      - linf
+reproduction:
+  num_instances: 20
+  hidden_layer_variants:
+    - [10]
+    - [10, 10, 10]
+    - [50]
+    - [100]
+  border_distance_time_limit: 60.0
+  show_progress: true

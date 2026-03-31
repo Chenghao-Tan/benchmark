@@ -15,6 +15,7 @@ from method.method_object import MethodObject
 from method.probe.probe import ProbeMethod
 from method.rbr.rbr import RbrMethod
 from method.revise.revise import ReviseMethod
+from method.robust_ce.robust_ce import RobustCeMethod
 from method.roar.roar import RoarMethod
 from method.toy.toy import ToyMethod
 from method.wachter.wachter import WachterMethod
