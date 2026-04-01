@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +16,6 @@ from pyomo.opt import SolverStatus, TerminationCondition
 from dataset.dataset_object import DatasetObject
 from model.mlp.mlp import MlpModel
 from preprocess.preprocess_utils import dataset_has_attr, resolve_feature_metadata
-from utils.caching import get_cache_dir
 
 SUPPORTED_UNCERTAINTY_NORMS = {"l2", "linf"}
 SUPPORTED_OBJECTIVE_NORMS = {"l1", "l2", "linf"}
@@ -53,6 +53,10 @@ class MlpParameters:
 class MasterTraceStep:
     candidate: pd.Series
     objective_value: float | None
+
+
+class RobustCeSolverError(RuntimeError):
+    pass
 
 
 def normalize_uncertainty_norm(uncertainty_norm: str) -> str:
@@ -265,17 +269,38 @@ def ensure_solver_available(solver_name: str) -> None:
     solver_name = normalize_solver_name(solver_name)
     solver = pyo.SolverFactory(solver_name)
     if not solver.available(exception_flag=False):
-        raise RuntimeError(f"Pyomo solver '{solver_name}' is unavailable")
+        raise RobustCeSolverError(
+            f"Gurobi access failed: Pyomo solver '{solver_name}' is unavailable"
+        )
     license_is_valid = getattr(solver, "license_is_valid", None)
     if callable(license_is_valid) and not bool(license_is_valid()):
-        raise RuntimeError(
-            f"Pyomo solver '{solver_name}' is available but the Gurobi license is not usable in this environment"
+        raise RobustCeSolverError(
+            "Gurobi access failed: the configured Gurobi license is not usable in this environment"
         )
 
 
 def _configure_tempdir() -> Path:
-    tempdir = Path(get_cache_dir("robust_ce_solver"))
-    tempdir.mkdir(parents=True, exist_ok=True)
+    candidates: list[Path] = []
+    for env_var in ("TMPDIR", "TEMP", "TMP"):
+        value = os.environ.get(env_var)
+        if value:
+            candidates.append(Path(value))
+    candidates.extend([Path("/tmp"), Path("/var/tmp"), Path.cwd()])
+
+    tempdir: Path | None = None
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_dir():
+            tempdir = candidate
+            break
+
+    if tempdir is None:
+        try:
+            tempdir = Path(tempfile.gettempdir())
+        except Exception as exc:  # pragma: no cover
+            raise RobustCeSolverError(
+                "Gurobi access failed: no usable temporary directory is available for Pyomo"
+            ) from exc
+
     tempdir_str = tempdir.as_posix()
     os.environ["TMPDIR"] = tempdir_str
     os.environ["TEMP"] = tempdir_str
@@ -614,9 +639,22 @@ def _solve_model(
     try:
         return solver.solve(model, tee=bool(solver_tee))
     except Exception as exc:  # pragma: no cover
-        raise RuntimeError(
-            f"RobustCeMethod failed to solve with solver '{solver_name}': {exc}"
-        ) from exc
+        message = str(exc)
+        lowered = message.lower()
+        if any(
+            pattern in lowered
+            for pattern in [
+                "could not resolve host",
+                "token.gurobi.com",
+                "license",
+                "wls",
+                "token server",
+                "user name mismatch",
+                "hostid mismatch",
+            ]
+        ):
+            raise RobustCeSolverError(f"Gurobi access failed: {message}") from None
+        raise
 
 
 def _extract_feature_solution(

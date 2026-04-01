@@ -7,6 +7,7 @@ from tqdm.auto import tqdm
 from dataset.dataset_object import DatasetObject
 from method.method_object import MethodObject
 from method.robust_ce.support import (
+    RobustCeSolverError,
     ensure_solver_available,
     extract_mlp_parameters,
     normalize_objective_norm,
@@ -24,6 +25,10 @@ from utils.seed import seed_context
 
 @register("robust_ce")
 class RobustCeMethod(MethodObject):
+    @staticmethod
+    def _graceful_solver_exit(exc: RobustCeSolverError) -> None:
+        raise SystemExit(f"{exc}\nExiting RobustCeMethod early.") from None
+
     def __init__(
         self,
         target_model: ModelObject,
@@ -102,7 +107,10 @@ class RobustCeMethod(MethodObject):
                     "desired_class is invalid for the trained target model"
                 )
 
-            ensure_solver_available(self._solver_name)
+            try:
+                ensure_solver_available(self._solver_name)
+            except RobustCeSolverError as exc:
+                self._graceful_solver_exit(exc)
             self._feature_constraints = resolve_feature_constraints(trainset)
             self._feature_names = list(self._feature_constraints.feature_names)
             self._mlp_params = extract_mlp_parameters(self._target_model)
@@ -168,22 +176,25 @@ class RobustCeMethod(MethodObject):
                         )
                         continue
 
-                counterfactual, counterfactual_stats = solve_robust_counterfactual(
-                    factual=row.astype("float64"),
-                    feature_constraints=self._feature_constraints,
-                    mlp_params=self._mlp_params,
-                    target_class_index=target_class_index,
-                    rho=self._rho,
-                    uncertainty_norm=self._uncertainty_norm,
-                    objective_norm=self._objective_norm,
-                    solver_name=self._solver_name,
-                    solver_tee=self._solver_tee,
-                    time_limit=self._time_limit,
-                    max_iterations=self._max_iterations,
-                    violation_tolerance=self._violation_tolerance,
-                    big_m_lower=self._big_m_lower,
-                    big_m_upper=self._big_m_upper,
-                )
+                try:
+                    counterfactual, counterfactual_stats = solve_robust_counterfactual(
+                        factual=row.astype("float64"),
+                        feature_constraints=self._feature_constraints,
+                        mlp_params=self._mlp_params,
+                        target_class_index=target_class_index,
+                        rho=self._rho,
+                        uncertainty_norm=self._uncertainty_norm,
+                        objective_norm=self._objective_norm,
+                        solver_name=self._solver_name,
+                        solver_tee=self._solver_tee,
+                        time_limit=self._time_limit,
+                        max_iterations=self._max_iterations,
+                        violation_tolerance=self._violation_tolerance,
+                        big_m_lower=self._big_m_lower,
+                        big_m_upper=self._big_m_upper,
+                    )
+                except RobustCeSolverError as exc:
+                    self._graceful_solver_exit(exc)
                 run_stats.append(counterfactual_stats)
                 if counterfactual is None:
                     rows.append(
