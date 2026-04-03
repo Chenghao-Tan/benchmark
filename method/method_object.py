@@ -1,3 +1,5 @@
+"""Base abstraction for counterfactual generation methods."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -9,6 +11,13 @@ from model.model_object import ModelObject
 
 
 class MethodObject(ABC):
+    """Define the interface shared by all counterfactual generation methods.
+
+    Implementations wrap a trained target model, optionally fit any method-
+    specific state, and generate counterfactual feature rows that align with the
+    benchmark dataset format.
+    """
+
     _target_model: ModelObject
     _seed: int | None = None
     _device: str
@@ -25,17 +34,57 @@ class MethodObject(ABC):
         desired_class: int | str | None = None,
         **kwargs,
     ):
+        """Initialize a counterfactual generation method.
+
+        Args:
+            target_model: Trained target model used to score or guide
+                counterfactual generation.
+            seed: Seed used for deterministic method behavior.
+            device: Execution device, typically ``"cpu"`` or ``"cuda"``.
+            desired_class: Optional target class the method should steer
+                counterfactuals toward.
+        """
         raise NotImplementedError
 
     @abstractmethod
     def fit(self, trainset: DatasetObject | None):
+        """Fit any method-specific state required before generation.
+
+        Args:
+            trainset: Frozen training dataset, or ``None`` for methods that do
+                not require fitting.
+        """
         raise NotImplementedError
 
     @abstractmethod
     def get_counterfactuals(self, factuals: pd.DataFrame) -> pd.DataFrame:
+        """Generate counterfactual features for a batch of factual inputs.
+
+        Args:
+            factuals: Feature-only DataFrame for the current batch.
+
+        Returns:
+            pd.DataFrame: Counterfactual feature rows with the same row count
+            and feature columns as ``factuals``.
+        """
         raise NotImplementedError
 
     def predict(self, testset: DatasetObject, batch_size: int = 20) -> DatasetObject:
+        """Generate a frozen counterfactual dataset from a factual dataset.
+
+        Args:
+            testset: Frozen factual dataset to transform.
+            batch_size: Number of rows processed per generation batch.
+
+        Returns:
+            DatasetObject: Frozen clone of ``testset`` marked as a
+            counterfactual dataset.
+
+        Raises:
+            RuntimeError: If the method has not been trained yet.
+            ValueError: If the input dataset is invalid or a generated batch
+                does not preserve the required row or column layout.
+        """
         if not self._is_trained:
             raise RuntimeError("Method is not trained")
         if batch_size < 1:

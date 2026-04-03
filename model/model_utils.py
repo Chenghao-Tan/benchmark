@@ -1,3 +1,5 @@
+"""Shared helpers for target model implementations."""
+
 from __future__ import annotations
 
 import logging
@@ -9,6 +11,17 @@ from utils.caching import get_cache_dir
 
 
 def resolve_device(device: str) -> str:
+    """Validate and normalize the requested execution device.
+
+    Args:
+        device: Requested device name.
+
+    Returns:
+        str: Normalized device string.
+
+    Raises:
+        ValueError: If the device is unsupported or CUDA is unavailable.
+    """
     device = device.lower()
     if device not in {"cpu", "cuda"}:
         raise ValueError(f"Unsupported device: {device}")
@@ -22,6 +35,21 @@ def logits_to_prediction(
     proba: bool = True,
     output_activation: str = "softmax",
 ) -> torch.Tensor:
+    """Convert model logits into probabilities or one-hot predictions.
+
+    Args:
+        logits: Raw model outputs.
+        proba: When ``True``, return probabilities. Otherwise return one-hot
+            hard predictions.
+        output_activation: Output convention expected from the model head.
+
+    Returns:
+        torch.Tensor: Probability matrix or one-hot predictions.
+
+    Raises:
+        ValueError: If ``output_activation`` is unsupported or incompatible with
+            the logits shape.
+    """
     output_activation = output_activation.lower()
     if output_activation == "softmax":
         probabilities = torch.softmax(logits, dim=1)
@@ -54,6 +82,19 @@ def logits_to_prediction(
 
 
 def build_optimizer(optimizer_name: str, parameters, learning_rate: float):
+    """Construct a torch optimizer from a benchmark configuration name.
+
+    Args:
+        optimizer_name: Optimizer identifier.
+        parameters: Iterable of model parameters.
+        learning_rate: Optimizer learning rate.
+
+    Returns:
+        torch.optim.Optimizer: Configured optimizer instance.
+
+    Raises:
+        ValueError: If the optimizer name is unsupported.
+    """
     optimizer_name = optimizer_name.lower()
     if optimizer_name == "adam":
         return torch.optim.Adam(parameters, lr=learning_rate)
@@ -65,6 +106,13 @@ def build_optimizer(optimizer_name: str, parameters, learning_rate: float):
 
 
 def save_torch_model(model: torch.nn.Module, save_name: str | None) -> None:
+    """Persist a torch model checkpoint in the benchmark cache directory.
+
+    Args:
+        model: Trained torch model to serialize.
+        save_name: Checkpoint name without the ``.pt`` suffix. When ``None``,
+            no checkpoint is written.
+    """
     if save_name is None:
         return
     model_dir = Path(get_cache_dir("models"))

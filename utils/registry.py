@@ -1,3 +1,5 @@
+"""Project-wide class registry used for datasets, models, methods, and metrics."""
+
 from __future__ import annotations
 
 from copy import deepcopy
@@ -12,6 +14,21 @@ global_registry: dict[str, dict[str, type]] = {
 
 
 def register(name: str):
+    """Register a class under the appropriate benchmark registry.
+
+    Args:
+        name: Public registry key used to look up the class later.
+
+    Returns:
+        collections.abc.Callable[[type], type]: Class decorator that stores the
+        decorated class in the matching registry.
+
+    Raises:
+        TypeError: If the decorated class does not inherit from a supported
+            benchmark base class.
+        KeyError: If the name is already registered for that registry type.
+    """
+
     def decorator(cls: type) -> type:
         registry_type = None
         mro_names = {base.__name__ for base in cls.__mro__}
@@ -39,6 +56,18 @@ def register(name: str):
 
 
 def get_registry(registry_type: str) -> dict[str, type]:
+    """Return a copy of one benchmark registry.
+
+    Args:
+        registry_type: Registry name such as ``"dataset"``, ``"preprocess"``,
+            ``"method"``, ``"model"``, or ``"evaluation"``.
+
+    Returns:
+        dict[str, type]: Copy of the requested registry mapping.
+
+    Raises:
+        KeyError: If ``registry_type`` is unknown.
+    """
     registry_type = registry_type.lower()
 
     mapping = {

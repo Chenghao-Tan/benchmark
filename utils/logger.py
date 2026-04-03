@@ -1,3 +1,5 @@
+"""Logging helpers for benchmark scripts and experiments."""
+
 from __future__ import annotations
 
 import logging
@@ -10,6 +12,17 @@ global_logger_initialized = False
 def setup_logger(
     level: str = "INFO", path: str | None = None, name: str = "benchmark"
 ) -> logging.Logger:
+    """Configure the root logger once and return a named logger.
+
+    Args:
+        level: Logging level name.
+        path: Optional log file path. When provided, parent directories are
+            created automatically.
+        name: Name of the logger to return.
+
+    Returns:
+        logging.Logger: Configured logger instance.
+    """
     global global_logger_initialized
 
     root_logger = logging.getLogger()

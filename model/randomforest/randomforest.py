@@ -1,3 +1,5 @@
+"""Random forest target model implementation."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -12,6 +14,16 @@ from utils.seed import seed_context
 
 @register("randomforest")
 class RandomForestModel(ModelObject):
+    """Train a scikit-learn random forest classifier for benchmark datasets.
+
+    Args:
+        seed: Seed passed to the underlying random forest and seeding context.
+        device: Included for API compatibility with torch-based models.
+        n_estimators: Number of trees in the ensemble.
+        max_depth: Optional maximum tree depth.
+        min_samples_split: Minimum samples required to split an internal node.
+    """
+
     def __init__(
         self,
         seed: int | None = None,
@@ -33,6 +45,14 @@ class RandomForestModel(ModelObject):
         self._is_trained = False
 
     def fit(self, trainset: DatasetObject | None):
+        """Train the random forest on a finalized dataset.
+
+        Args:
+            trainset: Frozen training dataset.
+
+        Raises:
+            ValueError: If ``trainset`` is missing.
+        """
         if trainset is None:
             raise ValueError("trainset is required for RandomForestModel.fit()")
         with seed_context(self._seed):
@@ -42,6 +62,16 @@ class RandomForestModel(ModelObject):
 
     @process_nan()
     def get_prediction(self, X: pd.DataFrame, proba: bool = True) -> torch.Tensor:
+        """Predict probabilities or hard labels for feature rows.
+
+        Args:
+            X: Feature matrix without the target column.
+            proba: When ``True``, return probabilities. Otherwise return one-hot
+                hard predictions.
+
+        Returns:
+            torch.Tensor: Prediction tensor on the CPU.
+        """
         if not self._is_trained:
             raise RuntimeError("Target model is not trained")
         with seed_context(self._seed):
@@ -56,6 +86,12 @@ class RandomForestModel(ModelObject):
             ).to(dtype=torch.float32)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
+        """Reject torch forward calls for the non-torch random forest model.
+
+        Raises:
+            TypeError: Always raised because the underlying estimator is not
+                differentiable through torch.
+        """
         with seed_context(self._seed):
             raise TypeError(
                 "RandomForestModel.forward() is unavailable because the underlying model is not torch-based"

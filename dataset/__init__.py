@@ -1,3 +1,5 @@
+"""Public dataset classes bundled with the benchmark project."""
+
 from dataset.adult.adult import AdultDataset
 from dataset.boston_housing.boston_housing import BostonHousingDataset
 from dataset.breast_cancer.breast_cancer import BreastCancerDataset

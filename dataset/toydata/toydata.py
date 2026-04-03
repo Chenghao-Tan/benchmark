@@ -1,3 +1,5 @@
+"""Toy dataset loader."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,6 +12,17 @@ from utils.registry import register
 
 @register("toydata")
 class ToydataDataset(DatasetObject):
+    """Load the bundled toy dataset and its YAML metadata.
+
+    Missing values are filled with per-column medians for numeric features and
+    per-column modes for non-numeric features before metadata is attached.
+
+    Args:
+        path: Directory that contains the dataset CSV and YAML metadata files.
+            When the path does not exist, the packaged dataset directory is
+            used.
+    """
+
     def __init__(self, path: str = "./dataset/toydata/", **kwargs):
         dataset_path = Path(path)
         if not dataset_path.exists():

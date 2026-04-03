@@ -1,3 +1,5 @@
+"""Adult dataset loader."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,6 +12,14 @@ from utils.registry import register
 
 @register("adult")
 class AdultDataset(DatasetObject):
+    """Load the bundled Adult dataset and its YAML metadata.
+
+    Args:
+        path: Directory that contains the dataset CSV and YAML metadata files.
+            When the path does not exist, the packaged dataset directory is
+            used.
+    """
+
     def __init__(self, path: str = "./dataset/adult/", **kwargs):
         dataset_path = Path(path)
         if not dataset_path.exists():

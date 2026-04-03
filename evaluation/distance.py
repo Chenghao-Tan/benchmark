@@ -1,3 +1,5 @@
+"""Distance-based counterfactual evaluation metrics."""
+
 from __future__ import annotations
 
 import pandas as pd
@@ -11,6 +13,13 @@ from utils.registry import register
 
 @register("distance")
 class DistanceEvaluation(EvaluationObject):
+    """Measure average feature-space distances for successful counterfactuals.
+
+    Args:
+        metrics: Distance metrics to report. Supported values are ``"l0"``,
+            ``"l1"``, ``"l2"``, and ``"linf"``. Defaults to all four metrics.
+    """
+
     @staticmethod
     def _resolve_metrics(metrics: list[str] | None) -> list[str]:
         resolved_metrics = [
@@ -31,6 +40,17 @@ class DistanceEvaluation(EvaluationObject):
     def evaluate(
         self, factuals: DatasetObject, counterfactuals: DatasetObject
     ) -> pd.DataFrame:
+        """Compute the configured distance metrics on valid counterfactual rows.
+
+        Args:
+            factuals: Frozen dataset containing the original inputs.
+            counterfactuals: Frozen dataset containing generated
+                counterfactuals.
+
+        Returns:
+            pd.DataFrame: Single-row table with one column per configured
+            distance metric.
+        """
         (
             factual_features,
             counterfactual_features,

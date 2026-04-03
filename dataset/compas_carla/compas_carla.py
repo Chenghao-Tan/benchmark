@@ -1,3 +1,5 @@
+"""COMPAS CARLA dataset loader."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -10,6 +12,17 @@ from utils.registry import register
 
 @register("compas_carla")
 class CompasCarlaDataset(DatasetObject):
+    """Load the bundled COMPAS CARLA dataset and its YAML metadata.
+
+    The loader removes incomplete rows and applies a fixed shuffle so repeated
+    runs start from the same row order.
+
+    Args:
+        path: Directory that contains the dataset CSV and YAML metadata files.
+            When the path does not exist, the packaged dataset directory is
+            used.
+    """
+
     def __init__(self, path: str = "./dataset/compas_carla/", **kwargs):
         dataset_path = Path(path)
         if not dataset_path.exists():

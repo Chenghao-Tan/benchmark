@@ -1,3 +1,5 @@
+"""Public evaluation classes bundled with the benchmark project."""
+
 from evaluation.distance import DistanceEvaluation
 from evaluation.evaluation_object import EvaluationObject
 from evaluation.validity import ValidityEvaluation
