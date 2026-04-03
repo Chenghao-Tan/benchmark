@@ -1,3 +1,5 @@
+"""Built-in preprocessing steps used by the benchmark pipeline."""
+
 from __future__ import annotations
 
 import math
@@ -18,6 +20,16 @@ from utils.seed import seed_context
 
 @register("encode")
 class EncodePreProcess(PreProcessObject):
+    """Encode categorical features into a numeric representation.
+
+    Args:
+        seed: Seed used for deterministic execution.
+        encoding: Default encoding mode for categorical features. Supported
+            values are ``"onehot"``, ``"thermometer"``, ``"none"``, and
+            ``None``.
+        override: Optional per-feature encoding overrides.
+    """
+
     @staticmethod
     def _format_category_suffix(category: object) -> str:
         if isinstance(category, (bool, np.bool_)):
@@ -198,6 +210,15 @@ class EncodePreProcess(PreProcessObject):
         self._override: dict[str, str] | None = self._resolve_override(override)
 
     def transform(self, input: DatasetObject) -> DatasetObject:
+        """Apply categorical encoding and update the dataset in place.
+
+        Args:
+            input: Mutable dataset to encode.
+
+        Returns:
+            DatasetObject: The same dataset instance with encoded columns and
+            derived metadata attached.
+        """
         with seed_context(self._seed):
             ensure_flag_absent(input, "encoding")
 
@@ -295,6 +316,17 @@ class EncodePreProcess(PreProcessObject):
 
 @register("scale")
 class ScalePreProcess(PreProcessObject):
+    """Scale numerical features while preserving feature metadata.
+
+    Args:
+        seed: Seed used for deterministic execution.
+        scaling: Default scaling mode for numerical features. Supported values
+            are ``"standardize"``, ``"normalize"``, ``"none"``, and ``None``.
+        override: Optional per-feature scaling overrides.
+        range: When ``True``, store the original numerical feature ranges on the
+            dataset if they are not already present.
+    """
+
     @staticmethod
     def _resolve_scaling(scaling: str | None) -> str | None:
         if scaling is None:
@@ -394,6 +426,15 @@ class ScalePreProcess(PreProcessObject):
         self._range: bool = range
 
     def transform(self, input: DatasetObject) -> DatasetObject:
+        """Apply numerical scaling and update the dataset in place.
+
+        Args:
+            input: Mutable dataset to scale.
+
+        Returns:
+            DatasetObject: The same dataset instance with scaling metadata
+            attached.
+        """
         with seed_context(self._seed):
             ensure_flag_absent(input, "scaling")
 
@@ -453,6 +494,13 @@ class ScalePreProcess(PreProcessObject):
 
 @register("reorder")
 class ReorderPreProcess(PreProcessObject):
+    """Reorder feature columns while keeping the target column at the end.
+
+    Args:
+        seed: Seed used for deterministic execution.
+        order: Ordered list of feature names excluding the target column.
+    """
+
     @staticmethod
     def _resolve_order(order: list[str] | None) -> list[str]:
         if order is None:
@@ -483,6 +531,14 @@ class ReorderPreProcess(PreProcessObject):
         self._order: list[str] = self._resolve_order(order)
 
     def transform(self, input: DatasetObject) -> DatasetObject:
+        """Apply the requested feature order to the dataset.
+
+        Args:
+            input: Mutable dataset to reorder.
+
+        Returns:
+            DatasetObject: The same dataset instance with reordered columns.
+        """
         with seed_context(self._seed):
             ensure_flag_absent(input, "reordered")
 
@@ -511,6 +567,14 @@ class ReorderPreProcess(PreProcessObject):
 
 @register("split")
 class SplitPreProcess(PreProcessObject):
+    """Split a dataset into training and test subsets.
+
+    Args:
+        seed: Seed used for deterministic shuffling.
+        split: Test split size as a row count or fraction of the dataset.
+        sample: Optional number of rows to sample from the test split.
+    """
+
     @staticmethod
     def _resolve_split(split: float | int) -> float | int:
         if isinstance(split, int):
@@ -548,6 +612,15 @@ class SplitPreProcess(PreProcessObject):
         self._sample: int | None = self._resolve_sample(sample)
 
     def transform(self, input: DatasetObject) -> tuple[DatasetObject, DatasetObject]:
+        """Split the dataset and return train/test dataset objects.
+
+        Args:
+            input: Mutable dataset to split.
+
+        Returns:
+            tuple[DatasetObject, DatasetObject]: Training dataset followed by
+            test dataset.
+        """
         with seed_context(self._seed):
             ensure_flag_absent(input, "trainset")
             ensure_flag_absent(input, "testset")
@@ -597,10 +670,24 @@ class SplitPreProcess(PreProcessObject):
 
 @register("finalize")
 class FinalizePreProcess(PreProcessObject):
+    """Freeze a dataset so downstream components can access it read-only.
+
+    Args:
+        seed: Seed stored for API consistency with other preprocessors.
+    """
+
     def __init__(self, seed: int | None = None, **kwargs):
         self._seed = seed
 
     def transform(self, input: DatasetObject) -> DatasetObject:
+        """Freeze the dataset and return it.
+
+        Args:
+            input: Mutable dataset to finalize.
+
+        Returns:
+            DatasetObject: The same dataset instance in frozen mode.
+        """
         with seed_context(self._seed):
             input.freeze()
             return input

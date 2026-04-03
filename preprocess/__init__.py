@@ -1,3 +1,5 @@
+"""Public preprocessing classes bundled with the benchmark project."""
+
 from preprocess.common import (
     EncodePreProcess,
     FinalizePreProcess,

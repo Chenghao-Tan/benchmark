@@ -1,3 +1,5 @@
+"""Linear target model implementation."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,6 +22,21 @@ from utils.seed import seed_context
 
 @register("linear")
 class LinearModel(ModelObject):
+    """Train a linear classifier for benchmark datasets.
+
+    Args:
+        seed: Seed used for deterministic training and inference.
+        device: Execution device, either ``"cpu"`` or ``"cuda"``.
+        epochs: Number of training epochs when training from scratch.
+        learning_rate: Optimizer learning rate.
+        batch_size: Mini-batch size used during training.
+        optimizer: Optimizer name passed to :func:`build_optimizer`.
+        criterion: Loss function, either ``"cross_entropy"`` or ``"bce"``.
+        output_activation: Output convention used during inference.
+        pretrained_path: Optional checkpoint path to load instead of training.
+        save_name: Optional checkpoint name for cache persistence.
+    """
+
     def __init__(
         self,
         seed: int | None = None,
@@ -72,6 +89,15 @@ class LinearModel(ModelObject):
         return torch.nn.Linear(input_dim, output_dim)
 
     def fit(self, trainset: DatasetObject | None):
+        """Train the linear model or load a pretrained checkpoint.
+
+        Args:
+            trainset: Frozen training dataset.
+
+        Raises:
+            ValueError: If ``trainset`` is missing or incompatible with the
+                configured output activation.
+        """
         if trainset is None:
             raise ValueError("trainset is required for LinearModel.fit()")
 
@@ -140,6 +166,16 @@ class LinearModel(ModelObject):
 
     @process_nan()
     def get_prediction(self, X: pd.DataFrame, proba: bool = True) -> torch.Tensor:
+        """Predict probabilities or hard labels for feature rows.
+
+        Args:
+            X: Feature matrix without the target column.
+            proba: When ``True``, return probabilities. Otherwise return one-hot
+                hard predictions.
+
+        Returns:
+            torch.Tensor: Prediction tensor on the CPU.
+        """
         if not self._is_trained or self._model is None:
             raise RuntimeError("Target model is not trained")
         with seed_context(self._seed):
@@ -157,6 +193,14 @@ class LinearModel(ModelObject):
             return prediction.detach().cpu()
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:
+        """Return logits suitable for gradient-based downstream methods.
+
+        Args:
+            X: Input tensor on any device.
+
+        Returns:
+            torch.Tensor: Logit tensor on the configured model device.
+        """
         if not self._is_trained or self._model is None:
             raise RuntimeError("Target model is not trained")
         with seed_context(self._seed):

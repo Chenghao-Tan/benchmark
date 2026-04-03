@@ -1,3 +1,5 @@
+"""Deterministic seeding helpers for reproducible benchmark runs."""
+
 from __future__ import annotations
 
 import contextlib
@@ -75,6 +77,17 @@ def _restore_torch_backend_state(state: dict[str, bool | None]) -> None:
 
 @contextlib.contextmanager
 def seed_context(seed: int | None):
+    """Temporarily seed Python, NumPy, and torch for deterministic execution.
+
+    The previous random states are restored when the context exits so callers
+    can scope reproducibility to a single training or inference block.
+
+    Args:
+        seed: Requested seed. When ``None``, a temporary random seed is drawn.
+
+    Yields:
+        int: The active seed used inside the context.
+    """
     python_state = random.getstate()
     numpy_state = np.random.get_state()
     torch_state = torch.random.get_rng_state()

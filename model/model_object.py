@@ -1,3 +1,5 @@
+"""Base abstraction for target models used by the benchmark."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -12,6 +14,14 @@ from dataset.dataset_object import DatasetObject
 
 
 def process_nan():
+    """Wrap prediction helpers so rows with NaNs return a sentinel output.
+
+    The wrapped method receives a copy of the input DataFrame where any row
+    containing NaN values is temporarily filled with zeros. After prediction,
+    those rows are replaced with ``-1`` so downstream code can treat them as
+    invalid.
+    """
+
     def decorator(func):
         @wraps(func)
         def wrapper(self, X: pd.DataFrame, *args, **kwargs):
@@ -31,6 +41,13 @@ def process_nan():
 
 
 class ModelObject(ABC):
+    """Define the interface shared by all target models in the benchmark.
+
+    Implementations are responsible for fitting on a finalized dataset,
+    returning predictions in a consistent tensor format, and exposing a torch
+    ``forward`` method when the underlying model supports gradients.
+    """
+
     _model: torch.nn.Module | RandomForestClassifier
     _seed: int | None = None
     _device: str
@@ -44,13 +61,36 @@ class ModelObject(ABC):
 
     @abstractmethod
     def fit(self, trainset: DatasetObject | None):
+        """Train the model on a finalized dataset."""
         raise NotImplementedError
 
     @abstractmethod
     def get_prediction(self, X: pd.DataFrame, proba: bool = True) -> torch.Tensor:
+        """Run inference on raw feature rows.
+
+        Args:
+            X: Feature matrix without the target column.
+            proba: When ``True``, return probabilities. Otherwise return one-hot
+                hard predictions.
+
+        Returns:
+            torch.Tensor: Model output for each input row.
+        """
         raise NotImplementedError
 
     def predict(self, testset: DatasetObject, batch_size: int = 20) -> torch.Tensor:
+        """Predict hard labels for a finalized dataset in mini-batches.
+
+        Args:
+            testset: Frozen dataset to run inference on.
+            batch_size: Number of rows processed per batch.
+
+        Returns:
+            torch.Tensor: Concatenated one-hot predictions.
+
+        Raises:
+            RuntimeError: If the model has not been trained yet.
+        """
         if not self._is_trained:
             raise RuntimeError("Target model is not trained")
         X = testset.get(target=False)
@@ -63,6 +103,18 @@ class ModelObject(ABC):
     def predict_proba(
         self, testset: DatasetObject, batch_size: int = 20
     ) -> torch.Tensor:
+        """Predict class probabilities for a finalized dataset in mini-batches.
+
+        Args:
+            testset: Frozen dataset to run inference on.
+            batch_size: Number of rows processed per batch.
+
+        Returns:
+            torch.Tensor: Concatenated probability predictions.
+
+        Raises:
+            RuntimeError: If the model has not been trained yet.
+        """
         if not self._is_trained:
             raise RuntimeError("Target model is not trained")
         X = testset.get(target=False)
@@ -74,6 +126,7 @@ class ModelObject(ABC):
 
     @abstractmethod
     def forward(self, X: torch.Tensor) -> torch.Tensor:
+        """Run the model's forward pass on a tensor input."""
         raise NotImplementedError
 
     def __call__(self, X: torch.Tensor) -> torch.Tensor:
@@ -83,6 +136,20 @@ class ModelObject(ABC):
         self,
         trainset: DatasetObject,
     ) -> tuple[pd.DataFrame, torch.Tensor, int]:
+        """Convert a training dataset into feature and label tensors.
+
+        Args:
+            trainset: Frozen training dataset.
+
+        Returns:
+            tuple [pd.DataFrame, torch.Tensor, int]: Feature DataFrame, integer
+            class labels, and the output dimension required by the model.
+
+        Raises:
+            ValueError: If labels are empty or contain missing values.
+            TypeError: If single-column labels are not consistently string or
+                integer-like.
+        """
         X = trainset.get(target=False)
         y = trainset.get(target=True)
 
@@ -128,6 +195,15 @@ class ModelObject(ABC):
             return X, labels, output_dim
 
     def get_class_to_index(self) -> dict[int | str, int]:
+        """Return the mapping from original class values to model indices.
+
+        Returns:
+            dict [int | str, int]: Label-to-index mapping produced during
+            training data extraction.
+
+        Raises:
+            RuntimeError: If the model has not established a class mapping yet.
+        """
         if self._class_to_index is None:
             raise RuntimeError("Target model class mapping is unavailable")
         return dict(self._class_to_index)

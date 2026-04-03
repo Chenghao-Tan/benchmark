@@ -1,3 +1,5 @@
+"""Base dataset abstraction used throughout the benchmark pipeline."""
+
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -9,6 +11,14 @@ import yaml
 
 
 class DatasetObject(ABC):
+    """Store dataset rows together with feature metadata used by the benchmark.
+
+    A dataset starts in a mutable state so preprocessors can update the backing
+    DataFrame and attach derived attributes. Once preprocessing is complete,
+    call :meth:`freeze` to switch into read-only access mode for downstream
+    training, generation, and evaluation code.
+    """
+
     _rawdf: pd.DataFrame
     _freeze: bool = False
     target_column: str
@@ -40,10 +50,32 @@ class DatasetObject(ABC):
             )
 
     def snapshot(self) -> pd.DataFrame:
+        """Return a deep copy of the current mutable dataset contents.
+
+        Returns:
+            pd.DataFrame: Copy of the underlying dataset table.
+
+        Raises:
+            RuntimeError: If the dataset has already been frozen.
+        """
         self._ensure_mutable()
         return self._rawdf.copy(deep=True)
 
     def update(self, flag: str, value: object, df: pd.DataFrame | None = None) -> bool:
+        """Update mutable dataset state or attach derived metadata.
+
+        Args:
+            flag: Attribute name to set on the dataset instance.
+            value: Value to store under ``flag``.
+            df: Optional replacement DataFrame for the dataset rows.
+
+        Returns:
+            bool: ``True`` when the update completes.
+
+        Raises:
+            RuntimeError: If the dataset has already been frozen.
+            ValueError: If ``flag`` is ``None``.
+        """
         self._ensure_mutable()
         if flag is None:
             raise ValueError("flag must not be None")
@@ -53,6 +85,17 @@ class DatasetObject(ABC):
         return True
 
     def attr(self, flag: str) -> object:
+        """Return a deep copy of a public dataset attribute.
+
+        Args:
+            flag: Name of the attribute to retrieve.
+
+        Returns:
+            object: Copy of the requested attribute value.
+
+        Raises:
+            AttributeError: If the attribute is protected or missing.
+        """
         if flag.startswith("_"):
             raise AttributeError(f"Access to protected member '{flag}' is forbidden")
         if not hasattr(self, flag):
@@ -60,9 +103,23 @@ class DatasetObject(ABC):
         return deepcopy(getattr(self, flag))
 
     def freeze(self):
+        """Mark the dataset as finalized and enable read-only accessors."""
         self._freeze = True
 
     def get(self, target: bool = False) -> pd.DataFrame:
+        """Return either the feature matrix or the target column.
+
+        Args:
+            target: When ``True``, return only the target column. Otherwise,
+                return all non-target feature columns.
+
+        Returns:
+            pd.DataFrame: Deep copy of the selected columns.
+
+        Raises:
+            RuntimeError: If the dataset is still mutable.
+            KeyError: If the configured target column is missing.
+        """
         self._ensure_frozen()
         target_column = self.target_column
         if target_column not in self._rawdf.columns:
@@ -72,14 +129,29 @@ class DatasetObject(ABC):
         return self._rawdf.loc[:, self._rawdf.columns != target_column].copy(deep=True)
 
     def ordered_features(self) -> list[str]:
+        """Return the frozen column order used by the dataset."""
         self._ensure_frozen()
         return list(self._rawdf.columns)
 
     def __len__(self) -> int:
+        """Return the number of rows in the frozen dataset."""
         self._ensure_frozen()
         return int(self._rawdf.shape[0])
 
     def __getitem__(self, key) -> pd.DataFrame:
+        """Access frozen rows or columns by index, slice, or column name.
+
+        Args:
+            key: Integer row index, row slice, or string column name.
+
+        Returns:
+            pd.DataFrame: Deep copy of the selected rows or column.
+
+        Raises:
+            RuntimeError: If the dataset is still mutable.
+            KeyError: If a requested column name does not exist.
+            TypeError: If ``key`` uses an unsupported type.
+        """
         self._ensure_frozen()
         if isinstance(key, int):
             return self._rawdf.iloc[[key]].copy(deep=True)
@@ -94,6 +166,11 @@ class DatasetObject(ABC):
         )
 
     def clone(self) -> DatasetObject:
+        """Create a mutable copy of the dataset and its attached metadata.
+
+        Returns:
+            DatasetObject: Deep-copied dataset instance with ``_freeze`` reset.
+        """
         clone = self.__class__.__new__(self.__class__)
         clone.__dict__ = deepcopy(self.__dict__)
         clone._freeze = False
