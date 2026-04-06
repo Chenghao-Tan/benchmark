@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import torch
+from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from dataset.dataset_object import DatasetObject
@@ -28,6 +30,7 @@ class MlpModel(ModelObject):
         learning_rate: float = 0.01,
         batch_size: int = 16,
         layers: list[int] | None = None,
+        sampling: str = "uniform",
         optimizer: str = "adam",
         criterion: str = "cross_entropy",
         output_activation: str = "softmax",
@@ -44,6 +47,7 @@ class MlpModel(ModelObject):
         self._learning_rate: float = float(learning_rate)
         self._batch_size: int = int(batch_size)
         self._layers: list[int] = list(layers or [32, 16])
+        self._sampling: str = str(sampling).lower()
         self._optimizer_name: str = optimizer
         self._criterion_name: str = criterion.lower()
         self._output_activation_name: str = output_activation.lower()
@@ -53,6 +57,8 @@ class MlpModel(ModelObject):
 
         if self._batch_size < 1:
             raise ValueError("batch_size must be >= 1")
+        if self._sampling not in {"uniform", "weighted"}:
+            raise ValueError("sampling must be either 'uniform' or 'weighted'")
         if self._criterion_name not in {"cross_entropy", "bce"}:
             raise ValueError(
                 "MlpModel supports criterion='cross_entropy' or criterion='bce' only"
@@ -125,11 +131,41 @@ class MlpModel(ModelObject):
                 criterion = torch.nn.BCELoss()
                 y_tensor = labels.to(self._device).to(dtype=torch.float32).unsqueeze(1)
 
+            sampler = None
+            if self._sampling == "weighted":
+                label_indices = labels.detach().cpu().numpy()
+                class_counts = np.bincount(label_indices)
+                if np.any(class_counts == 0):
+                    raise ValueError(
+                        "Weighted sampling requires every class to appear at least once"
+                    )
+                class_weights = 1.0 / class_counts
+                sample_weights = class_weights[label_indices]
+                sampler = WeightedRandomSampler(
+                    weights=torch.tensor(sample_weights, dtype=torch.float32),
+                    num_samples=X_tensor.shape[0],
+                    replacement=True,
+                )
+
             self._model.train()
             for _ in tqdm(range(self._epochs), desc="mlp-fit", leave=False):
-                permutation = torch.randperm(X_tensor.shape[0], device=self._device)
-                for start in range(0, X_tensor.shape[0], self._batch_size):
-                    batch_indices = permutation[start : start + self._batch_size]
+                if sampler is None:
+                    permutation = torch.randperm(X_tensor.shape[0], device=self._device)
+                    batch_index_iterator = (
+                        permutation[start : start + self._batch_size]
+                        for start in range(0, X_tensor.shape[0], self._batch_size)
+                    )
+                else:
+                    sampled_indices = list(iter(sampler))
+                    batch_index_iterator = (
+                        torch.tensor(
+                            sampled_indices[start : start + self._batch_size],
+                            dtype=torch.long,
+                            device=self._device,
+                        )
+                        for start in range(0, len(sampled_indices), self._batch_size)
+                    )
+                for batch_indices in batch_index_iterator:
                     batch_X = X_tensor[batch_indices]
                     batch_y = y_tensor[batch_indices]
                     optimizer.zero_grad()
