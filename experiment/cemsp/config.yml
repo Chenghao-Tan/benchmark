@@ -1,0 +1,46 @@
+name: cemsp_hepatitis_reproduce
+logger:
+  level: INFO
+  path: ./logs/cemsp_hepatitis_reproduce.log
+caching:
+  path: ./cache/
+
+dataset:
+  name: hepatitis
+
+preprocess:
+  - name: split
+    seed: 42
+    split: 0.3
+
+model:
+  name: mlp
+  seed: 42
+  layers:
+    - 30
+    - 10
+  epochs: 100
+  learning_rate: 0.001
+  batch_size: 32
+  sampling: weighted
+  optimizer: adam
+  criterion: cross_entropy
+  output_activation: softmax
+  save_name: null
+
+method:
+  name: cemsp
+  seed: 42
+  desired_class: 1
+  replacement_policy: bounds
+  max_counterfactuals: 100
+  return_mode: first
+
+evaluation: []
+
+reproduction:
+  desired_class: 1
+  split_seed: 42
+  normal_range:
+    lower: [35.6, 30.0, 10.0, 10.0, 0.0, 5.32, 5.368, 59.0, 10.0, 66.0]
+    upper: [46.0, 120.0, 35.0, 35.0, 21.0, 12.92, 5.368, 84.0, 42.0, 87.0]
