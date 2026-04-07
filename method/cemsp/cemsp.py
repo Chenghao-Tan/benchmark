@@ -7,9 +7,9 @@ from dataset.dataset_object import DatasetObject
 from method.cemsp.support import (
     BlackBoxModelTypes,
     CFSolver,
-    FeatureGroups,
     MapSolver,
     RecourseModelAdapter,
+    build_change_mask,
     ensure_supported_target_model,
     find_cf,
     parse_feature_vector,
@@ -79,21 +79,27 @@ class CemspMethod(MethodObject):
         }:
             raise ValueError("Unsupported replacement_policy for CemspMethod")
         if self._explicit_to_replace is not None and (
-            self._explicit_lower_bounds is not None or self._explicit_upper_bounds is not None
+            self._explicit_lower_bounds is not None
+            or self._explicit_upper_bounds is not None
         ):
             raise ValueError(
                 "explicit_to_replace is incompatible with explicit_lower_bounds/explicit_upper_bounds"
             )
         if self._replacement_policy == "explicit" and self._explicit_to_replace is None:
-            raise ValueError(
-                "replacement_policy='explicit' requires explicit_to_replace"
-            )
+            raise ValueError("replacement_policy='explicit' requires explicit_to_replace")
         if self._replacement_policy == "bounds" and (
             self._explicit_lower_bounds is None and self._explicit_upper_bounds is None
         ):
             raise ValueError(
                 "replacement_policy='bounds' requires explicit_lower_bounds and/or explicit_upper_bounds"
             )
+
+        if self._replacement_policy == "positive_median":
+            self._replacement_statistic = "median"
+        elif self._replacement_policy == "positive_mean":
+            self._replacement_statistic = "mean"
+        elif self._replacement_policy == "positive_quantile":
+            self._replacement_statistic = "quantile"
 
     def fit(self, trainset: DatasetObject | None):
         if trainset is None:
@@ -113,11 +119,10 @@ class CemspMethod(MethodObject):
             self._feature_names = list(feature_df.columns)
             self._feature_groups = resolve_feature_groups(trainset)
             self._adapter = RecourseModelAdapter(self._target_model, self._feature_names)
-            self._feature_intervals = {}
-            for feature_name in self._feature_names:
-                feature_values = feature_df[feature_name].to_numpy(dtype=np.float64)
-                self._feature_intervals[feature_name] = np.unique(feature_values)
-
+            self._feature_intervals = {
+                feature_name: np.unique(feature_df[feature_name].to_numpy(dtype=np.float64))
+                for feature_name in self._feature_names
+            }
             self._predicted_train_classes = self._adapter.predict(feature_df)
             self._train_features = feature_df.copy(deep=True)
             self._prototype_by_class = {}
@@ -137,6 +142,7 @@ class CemspMethod(MethodObject):
                 )
             else:
                 self._explicit_to_replace_vector = None
+
             if self._explicit_lower_bounds is not None:
                 self._explicit_lower_bounds_vector = parse_feature_vector(
                     self._explicit_lower_bounds,
@@ -145,6 +151,7 @@ class CemspMethod(MethodObject):
                 )
             else:
                 self._explicit_lower_bounds_vector = None
+
             if self._explicit_upper_bounds is not None:
                 self._explicit_upper_bounds_vector = parse_feature_vector(
                     self._explicit_upper_bounds,
@@ -153,6 +160,22 @@ class CemspMethod(MethodObject):
                 )
             else:
                 self._explicit_upper_bounds_vector = None
+
+            if (
+                self._explicit_lower_bounds_vector is not None
+                and self._explicit_upper_bounds_vector is not None
+            ):
+                invalid_range = (
+                    self._explicit_lower_bounds_vector > self._explicit_upper_bounds_vector
+                )
+                if bool(invalid_range.any()):
+                    invalid_names = [
+                        self._feature_names[index]
+                        for index in np.flatnonzero(invalid_range)
+                    ]
+                    raise ValueError(
+                        f"explicit lower bounds exceed upper bounds for: {invalid_names}"
+                    )
 
             self._is_trained = True
 
@@ -177,22 +200,53 @@ class CemspMethod(MethodObject):
             values.append(value)
         return np.asarray(values, dtype=np.float64)
 
-    def _apply_constraints(self, factual: np.ndarray, replacement: np.ndarray) -> np.ndarray:
-        adjusted = replacement.copy()
+    def _snap_to_supported_value(self, feature_index: int, value: float) -> float:
+        feature_name = self._feature_names[feature_index]
+        feature_kind = self._feature_groups.feature_type[feature_name].lower()
+        if feature_kind == "numerical":
+            return float(value)
+
+        candidates = self._feature_intervals[feature_name]
+        distances = np.abs(candidates - value)
+        return float(candidates[int(np.argmin(distances))])
+
+    def _enforce_plausibility_constraints(
+        self, factual: np.ndarray, replacement: np.ndarray
+    ) -> np.ndarray:
+        factual = np.asarray(factual, dtype=np.float64).reshape(-1)
+        adjusted = np.asarray(replacement, dtype=np.float64).reshape(-1).copy()
+
         for index, constraint in enumerate(self._feature_groups.plausibility_constraints):
-            if constraint == "=":
+            if constraint == "=" and not np.isclose(adjusted[index], factual[index]):
                 adjusted[index] = factual[index]
             elif constraint == ">=" and adjusted[index] < factual[index]:
                 adjusted[index] = factual[index]
             elif constraint == "<=" and adjusted[index] > factual[index]:
                 adjusted[index] = factual[index]
-        for index, feature_name in enumerate(self._feature_names):
-            feature_kind = self._feature_groups.feature_type[feature_name].lower()
-            if feature_kind != "numerical":
-                candidates = self._feature_intervals[feature_name]
-                distances = np.abs(candidates - adjusted[index])
-                adjusted[index] = float(candidates[int(np.argmin(distances))])
+
+            adjusted[index] = self._snap_to_supported_value(index, adjusted[index])
         return adjusted
+
+    def _build_bounds_replacement(self, factual: np.ndarray) -> np.ndarray:
+        replacement = np.asarray(factual, dtype=np.float64).reshape(-1).copy()
+        for index in range(len(self._feature_names)):
+            lower_bound = (
+                None
+                if self._explicit_lower_bounds_vector is None
+                else float(self._explicit_lower_bounds_vector[index])
+            )
+            upper_bound = (
+                None
+                if self._explicit_upper_bounds_vector is None
+                else float(self._explicit_upper_bounds_vector[index])
+            )
+            value = replacement[index]
+
+            if lower_bound is not None and value < lower_bound:
+                replacement[index] = lower_bound
+            elif upper_bound is not None and value > upper_bound:
+                replacement[index] = upper_bound
+        return replacement
 
     def _build_replacement_vector(
         self,
@@ -205,35 +259,53 @@ class CemspMethod(MethodObject):
             self._explicit_lower_bounds_vector is not None
             or self._explicit_upper_bounds_vector is not None
         ):
-            replacement = factual.copy()
-            if self._explicit_lower_bounds_vector is not None:
-                replacement = np.maximum(replacement, self._explicit_lower_bounds_vector)
-            if self._explicit_upper_bounds_vector is not None:
-                replacement = np.minimum(replacement, self._explicit_upper_bounds_vector)
+            replacement = self._build_bounds_replacement(factual)
         else:
             if desired_class not in self._prototype_by_class:
                 raise RuntimeError(
                     f"No replacement prototype could be built for desired class {desired_class}"
                 )
             replacement = self._prototype_by_class[desired_class].copy()
-        return self._apply_constraints(factual, replacement)
+
+        return self._enforce_plausibility_constraints(factual, replacement)
+
+    def _build_replacement_problem(
+        self,
+        factual: np.ndarray,
+        desired_class: int | str,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        replacement = self._build_replacement_vector(factual, desired_class)
+        candidate_indices = np.flatnonzero(build_change_mask(factual, replacement)).astype(
+            np.int64
+        )
+        return replacement, candidate_indices
 
     def _enumerate_counterfactuals(
         self,
         factual: np.ndarray,
         desired_class: int | str,
-        to_replace: np.ndarray,
+        replacement: np.ndarray,
+        candidate_indices: np.ndarray | None = None,
     ) -> list[np.ndarray]:
-        if np.allclose(factual, to_replace, atol=1e-8, rtol=1e-8):
+        factual = np.asarray(factual, dtype=np.float64).reshape(-1)
+        replacement = np.asarray(replacement, dtype=np.float64).reshape(-1)
+        if candidate_indices is None:
+            candidate_indices = np.flatnonzero(
+                build_change_mask(factual, replacement)
+            ).astype(np.int64)
+        else:
+            candidate_indices = np.asarray(candidate_indices, dtype=np.int64).reshape(-1)
+
+        if candidate_indices.size == 0:
             return []
 
-        mapsolver = MapSolver(len(self._feature_names))
+        mapsolver = MapSolver(candidate_indices.size)
         cfsolver = CFSolver(
-            len(self._feature_names),
-            self._adapter,
-            factual,
-            to_replace,
-            desired_class,
+            candidate_indices=candidate_indices,
+            model=self._adapter,
+            input_x=factual,
+            replacement_x=replacement,
+            desired_pred=desired_class,
         )
 
         counterfactuals: list[np.ndarray] = []
@@ -242,6 +314,25 @@ class CemspMethod(MethodObject):
             if len(counterfactuals) >= self._max_counterfactuals:
                 break
         return counterfactuals
+
+    def _generate_counterfactuals_for_factual(
+        self,
+        factual: np.ndarray,
+        desired_class: int | str,
+    ) -> list[np.ndarray]:
+        if not self._is_trained:
+            raise RuntimeError("Method is not trained")
+        factual = np.asarray(factual, dtype=np.float64).reshape(-1)
+        replacement, candidate_indices = self._build_replacement_problem(
+            factual,
+            desired_class,
+        )
+        return self._enumerate_counterfactuals(
+            factual,
+            desired_class,
+            replacement,
+            candidate_indices,
+        )
 
     def _select_counterfactual(
         self, factual: np.ndarray, counterfactuals: list[np.ndarray]
@@ -253,7 +344,10 @@ class CemspMethod(MethodObject):
 
         best_index = int(
             np.argmin(
-                [float(np.abs(counterfactual - factual).sum()) for counterfactual in counterfactuals]
+                [
+                    float(np.abs(counterfactual - factual).sum())
+                    for counterfactual in counterfactuals
+                ]
             )
         )
         return counterfactuals[best_index]
@@ -277,21 +371,19 @@ class CemspMethod(MethodObject):
             for row_index, (_, row) in enumerate(factuals.iterrows()):
                 factual = row.to_numpy(dtype=np.float64)
                 desired_class = desired_classes[row_index]
-                to_replace = self._build_replacement_vector(factual, desired_class)
-                counterfactuals_list = self._enumerate_counterfactuals(
+                counterfactuals_list = self._generate_counterfactuals_for_factual(
                     factual,
                     desired_class,
-                    to_replace,
                 )
                 candidate = self._select_counterfactual(factual, counterfactuals_list)
                 if candidate is None:
-                    rows.append(np.full(len(self._feature_names), np.nan, dtype=np.float64))
+                    rows.append(
+                        np.full(len(self._feature_names), np.nan, dtype=np.float64)
+                    )
                 else:
                     rows.append(candidate)
 
-        candidates = pd.DataFrame(
-            rows, index=factuals.index, columns=self._feature_names
-        )
+        candidates = pd.DataFrame(rows, index=factuals.index, columns=self._feature_names)
         return validate_counterfactuals(
             target_model=self._target_model,
             factuals=factuals,

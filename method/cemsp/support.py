@@ -130,16 +130,17 @@ class RecourseModelAdapter:
     ) -> pd.DataFrame:
         return to_feature_dataframe(X, self._feature_names)
 
-    def predict(
-        self, X: pd.DataFrame | np.ndarray | torch.Tensor
-    ) -> np.ndarray:
+    def predict(self, X: pd.DataFrame | np.ndarray | torch.Tensor) -> np.ndarray:
         features = self.get_ordered_features(X)
         prediction = self._target_model.get_prediction(features, proba=False)
         if isinstance(prediction, torch.Tensor):
             label_indices = prediction.detach().cpu().numpy().argmax(axis=1)
         else:
             label_indices = np.asarray(prediction).argmax(axis=1)
-        return np.asarray([self._index_to_class[int(index)] for index in label_indices], dtype=object)
+        return np.asarray(
+            [self._index_to_class[int(index)] for index in label_indices],
+            dtype=object,
+        )
 
     def predict_label_indices(
         self, X: pd.DataFrame | np.ndarray | torch.Tensor
@@ -162,14 +163,21 @@ def resolve_target_classes(
     if desired_class is not None:
         if desired_class not in class_to_index:
             raise ValueError("desired_class is invalid for the trained target model")
-        return np.full(shape=original_predictions.shape, fill_value=desired_class, dtype=object)
+        return np.full(
+            shape=original_predictions.shape,
+            fill_value=desired_class,
+            dtype=object,
+        )
 
     if len(class_to_index) != 2:
         raise ValueError(
             "desired_class=None is supported for binary classification only"
         )
     opposite_indices = 1 - original_predictions.astype(np.int64, copy=False)
-    return np.asarray([index_to_class[int(index)] for index in opposite_indices], dtype=object)
+    return np.asarray(
+        [index_to_class[int(index)] for index in opposite_indices],
+        dtype=object,
+    )
 
 
 def validate_counterfactuals(
@@ -236,6 +244,17 @@ def parse_feature_vector(
     return series.to_numpy(dtype=np.float64, copy=True)
 
 
+def build_change_mask(
+    factual: np.ndarray,
+    replacement: np.ndarray,
+    atol: float = 1e-8,
+    rtol: float = 1e-8,
+) -> np.ndarray:
+    factual = np.asarray(factual, dtype=np.float64).reshape(-1)
+    replacement = np.asarray(replacement, dtype=np.float64).reshape(-1)
+    return ~np.isclose(factual, replacement, atol=atol, rtol=rtol)
+
+
 class MapSolver:
     def __init__(self, n_constraints: int):
         self.solver = Solver()
@@ -266,16 +285,17 @@ class MapSolver:
 class CFSolver:
     def __init__(
         self,
-        n_features: int,
+        candidate_indices: Sequence[int],
         model: RecourseModelAdapter,
         input_x: np.ndarray,
-        to_replace: np.ndarray,
+        replacement_x: np.ndarray,
         desired_pred: int | str,
     ):
-        self.n = int(n_features)
+        self.candidate_indices = np.asarray(candidate_indices, dtype=np.int64)
+        self.n = int(self.candidate_indices.shape[0])
         self.model = model
         self.input_x = np.asarray(input_x, dtype=np.float64).reshape(1, -1)
-        self.to_replace = np.asarray(to_replace, dtype=np.float64).reshape(1, -1)
+        self.replacement_x = np.asarray(replacement_x, dtype=np.float64).reshape(1, -1)
         self.desired_pred = desired_pred
 
     def check_cf(self, mask: np.ndarray) -> bool:
@@ -289,8 +309,14 @@ class CFSolver:
         return mask
 
     def mask_to_cf(self, mask: np.ndarray) -> np.ndarray:
-        mask = np.asarray(mask, dtype=np.float64).reshape(1, -1)
-        return self.input_x * (1.0 - mask) + self.to_replace * mask
+        cf = self.input_x.copy()
+        if self.n == 0:
+            return cf
+
+        mask = np.asarray(mask, dtype=bool).reshape(-1)
+        active_indices = self.candidate_indices[mask]
+        cf[:, active_indices] = self.replacement_x[:, active_indices]
+        return cf
 
     def complement(self, subset: Sequence[int]) -> set[int]:
         return set(range(self.n)).difference(subset)

@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import torch
 import yaml
+from scipy import stats
 from scipy.spatial.distance import cdist, euclidean
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import train_test_split
@@ -24,7 +25,6 @@ import dataset  # noqa: F401
 import method  # noqa: F401
 import model  # noqa: F401
 import preprocess  # noqa: F401
-from experiment import Experiment
 from utils.registry import get_registry
 
 
@@ -43,15 +43,6 @@ def _apply_device(config: dict, device: str) -> dict:
     return cfg
 
 
-def _normalize_config(config: dict) -> dict:
-    cfg = deepcopy(config)
-    preprocess_cfg = list(cfg.get("preprocess", []))
-    if not any(item.get("name", "").lower() == "finalize" for item in preprocess_cfg):
-        preprocess_cfg.append({"name": "finalize"})
-    cfg["preprocess"] = preprocess_cfg
-    return cfg
-
-
 def _build_dataset(config: dict):
     dataset_cfg = deepcopy(config["dataset"])
     dataset_name = dataset_cfg.pop("name")
@@ -59,9 +50,10 @@ def _build_dataset(config: dict):
     return dataset_class(**dataset_cfg)
 
 
-def _build_model(config: dict):
+def _build_model(config: dict, seed: int):
     model_cfg = deepcopy(config["model"])
     model_name = model_cfg.pop("name")
+    model_cfg["seed"] = int(seed)
     model_class = get_registry("model")[model_name]
     return model_class(**model_cfg)
 
@@ -116,15 +108,17 @@ def _materialize_reference_split(raw_dataset, split_seed: int):
 
 def _scale_reference_split(trainset_raw, testset_raw):
     scaler = StandardScaler()
+    train_x_raw = trainset_raw.get(target=False)
+    test_x_raw = testset_raw.get(target=False)
     train_x = pd.DataFrame(
-        scaler.fit_transform(trainset_raw.get(target=False)),
-        index=trainset_raw.get(target=False).index,
-        columns=trainset_raw.get(target=False).columns,
+        scaler.fit_transform(train_x_raw),
+        index=train_x_raw.index,
+        columns=train_x_raw.columns,
     )
     test_x = pd.DataFrame(
-        scaler.transform(testset_raw.get(target=False)),
-        index=testset_raw.get(target=False).index,
-        columns=testset_raw.get(target=False).columns,
+        scaler.transform(test_x_raw),
+        index=test_x_raw.index,
+        columns=test_x_raw.columns,
     )
     train_y = trainset_raw.get(target=True)
     test_y = testset_raw.get(target=True)
@@ -142,7 +136,7 @@ def _compute_model_metrics(model, testset) -> dict[str, float]:
     return {"test_accuracy": accuracy, "test_f1": f1}
 
 
-def _hausdorff_score(cfs1, cfs2) -> float:
+def _hausdorff_score(cfs1: np.ndarray, cfs2: np.ndarray) -> float:
     cfs1 = np.asarray(cfs1, dtype=np.float64)
     cfs2 = np.asarray(cfs2, dtype=np.float64)
     pairwise_distance = cdist(cfs1, cfs2)
@@ -158,39 +152,46 @@ def _percent_range(values, lower: float = 0.0, upper: float = 1.0) -> np.ndarray
     start = int(lower * array.shape[0])
     end = int(upper * array.shape[0])
     sliced = array[start:end]
-    if sliced.shape[0] == 0:
+    if sliced.size == 0:
         return array
     return sliced
 
 
-class _Evaluator:
+class _ReferenceEvaluator:
     def __init__(self, dataset: np.ndarray, tp_set: np.ndarray):
-        self.dataset = dataset
-        self.true_positive = tp_set
+        self.dataset = np.asarray(dataset, dtype=np.float64)
+        self.true_positive = np.asarray(tp_set, dtype=np.float64)
+        self._mads: np.ndarray | None = None
 
     def sparsity(self, input_x: np.ndarray, cfs: np.ndarray, precision: int = 3) -> float:
         lens = len(cfs)
         sparsity = 0.0
-        for i in range(lens):
-            tmp = (input_x - cfs[i]).round(precision)
+        for index in range(lens):
+            tmp = (input_x - cfs[index]).round(precision)
             sparsity += float((tmp == 0).sum())
         return float(sparsity / (lens * len(cfs[0])))
 
     def average_percentile_shift(self, input_x: np.ndarray, cfs: np.ndarray) -> float:
         lens = len(cfs)
         shift = np.zeros(input_x.shape[1], dtype=np.float64)
-        for i in range(lens):
-            for j in range(input_x.shape[1]):
-                src_percentile = np.mean(self.dataset[:, j] <= input_x[:, j]) * 100.0
-                tgt_percentile = np.mean(self.dataset[:, j] <= cfs[i, j]) * 100.0
-                shift[j] += abs(src_percentile - tgt_percentile)
+        for index in range(lens):
+            for feature_index in range(input_x.shape[1]):
+                src_percentile = stats.percentileofscore(
+                    self.dataset[:, feature_index],
+                    float(input_x[0, feature_index]),
+                )
+                tgt_percentile = stats.percentileofscore(
+                    self.dataset[:, feature_index],
+                    float(cfs[index, feature_index]),
+                )
+                shift[feature_index] += abs(src_percentile - tgt_percentile)
         return float(shift.sum() / (100.0 * input_x.shape[1]))
 
     def proximity(self, cfs: np.ndarray) -> float:
         lens = len(cfs)
         proximity = 0.0
-        for i in range(lens):
-            cf = cfs[i:i + 1]
+        for index in range(lens):
+            cf = cfs[index : index + 1]
             distance = cdist(cf, self.true_positive).squeeze()
             nearest = int(np.argmin(distance))
             pivot = self.true_positive[nearest]
@@ -203,13 +204,13 @@ class _Evaluator:
         return float(proximity / lens)
 
     def diversity(self, cfs: np.ndarray) -> float:
-        k, d = cfs.shape
+        k, _ = cfs.shape
         if k <= 1:
             return -1.0
         diversity = 0.0
-        for i in range(k - 1):
-            for j in range(i + 1, k):
-                diversity += np.sum(np.abs(cfs[i] - cfs[j]))
+        for left in range(k - 1):
+            for right in range(left + 1, k):
+                diversity += self.compute_dist(cfs[left], cfs[right])
         return float(diversity * 2.0 / (k * (k - 1)))
 
     def count_diversity(self, cfs: np.ndarray, precision: int = 3) -> float:
@@ -217,11 +218,22 @@ class _Evaluator:
         if k <= 1:
             return -1.0
         diversity = 0.0
-        for i in range(k - 1):
-            for j in range(i + 1, k):
-                tmp = (cfs[i] - cfs[j]).round(precision)
+        for left in range(k - 1):
+            for right in range(left + 1, k):
+                tmp = (cfs[left] - cfs[right]).round(precision)
                 diversity += float((tmp != 0).sum())
         return float(diversity * 2.0 / (k * (k - 1) * d))
+
+    def get_mads(self) -> np.ndarray:
+        if self._mads is None:
+            self._mads = np.median(
+                np.abs(self.dataset - np.median(self.dataset, axis=0)),
+                axis=0,
+            )
+        return self._mads
+
+    def compute_dist(self, left: np.ndarray, right: np.ndarray) -> float:
+        return float(np.sum(np.multiply(np.abs(left - right), self.get_mads()), axis=0))
 
 
 def _collect_reference_sets(model, trainset, testset):
@@ -230,38 +242,142 @@ def _collect_reference_sets(model, trainset, testset):
     train_y = trainset.get(target=True).iloc[:, 0].astype(int).to_numpy()
     test_y = testset.get(target=True).iloc[:, 0].astype(int).to_numpy()
 
-    pred_test = model.get_prediction(test_x, proba=False).argmax(dim=1).detach().cpu().numpy()
-    pred_train = model.get_prediction(train_x, proba=False).argmax(dim=1).detach().cpu().numpy()
+    pred_test = (
+        model.get_prediction(test_x, proba=False).argmax(dim=1).detach().cpu().numpy()
+    )
+    pred_train = (
+        model.get_prediction(train_x, proba=False).argmax(dim=1).detach().cpu().numpy()
+    )
 
-    tn_idx = sorted(set(np.where(test_y == 0)[0]).intersection(np.where(pred_test == 0)[0]))
-    tp_idx = sorted(set(np.where(train_y == 1)[0]).intersection(np.where(pred_train == 1)[0]))
+    tn_idx = sorted(
+        set(np.where(test_y == 0)[0]).intersection(np.where(pred_test == 0)[0])
+    )
+    tp_idx = sorted(
+        set(np.where(train_y == 1)[0]).intersection(np.where(pred_train == 1)[0])
+    )
 
-    abnormal_test = test_x.iloc[tn_idx].to_numpy(dtype=np.float32)
-    normal_train = train_x.iloc[tp_idx].to_numpy(dtype=np.float32)
+    abnormal_test = test_x.iloc[tn_idx].to_numpy(dtype=np.float64)
+    normal_train = train_x.iloc[tp_idx].to_numpy(dtype=np.float64)
     return abnormal_test, normal_train
 
 
-def _run_cemsp_for_model(method, model, abnormal_test: np.ndarray, lower_bounds: np.ndarray, upper_bounds: np.ndarray):
-    counts = []
-    cf_sets = []
+def _run_cemsp_for_model(
+    method,
+    evaluator: _ReferenceEvaluator,
+    abnormal_test: np.ndarray,
+    desired_class: int | str,
+    collect_metrics: bool,
+):
+    counts: list[int] = []
+    cf_sets: list[np.ndarray] = []
+    cf_records: list[list[dict[str, object]]] = []
+    diversity_values: list[float] = []
+    count_diversity_values: list[float] = []
+
     for input_x in tqdm(abnormal_test, desc="cemsp-reproduce", leave=False):
         input_row = input_x.reshape(1, -1)
-        to_replace = np.where(input_row < lower_bounds, lower_bounds, input_row)
-        to_replace = np.where(to_replace > upper_bounds, upper_bounds, to_replace)
-        desired_class = 1
-        cfs = method._enumerate_counterfactuals(
-            input_row.reshape(-1).astype(np.float64),
-            desired_class,
-            to_replace.reshape(-1).astype(np.float64),
-        )
-        if not cfs:
-            cf_sets.append(np.empty((0, input_row.shape[1]), dtype=np.float64))
-            counts.append(0)
-            continue
-        cf_array = np.asarray(cfs, dtype=np.float64).reshape((-1, input_row.shape[1]))
+        cfs = method._generate_counterfactuals_for_factual(input_x, desired_class)
+        if cfs:
+            cf_array = np.asarray(cfs, dtype=np.float64).reshape((-1, input_row.shape[1]))
+        else:
+            cf_array = np.empty((0, input_row.shape[1]), dtype=np.float64)
+
+        counts.append(int(cf_array.shape[0]))
         cf_sets.append(cf_array)
-        counts.append(cf_array.shape[0])
-    return counts, cf_sets
+        diversity_values.append(evaluator.diversity(cf_array))
+        count_diversity_values.append(evaluator.count_diversity(cf_array))
+
+        records: list[dict[str, object]] = []
+        if collect_metrics:
+            for cf in cf_array:
+                cf_2d = cf.reshape(1, -1)
+                records.append(
+                    {
+                        "cf": cf_2d,
+                        "mask": (~np.isclose(cf, input_x, atol=1e-8, rtol=1e-8)).astype(
+                            np.float64
+                        ),
+                        "sparsity": evaluator.sparsity(input_row, cf_2d),
+                        "aps": evaluator.average_percentile_shift(input_row, cf_2d),
+                        "proximity": evaluator.proximity(cf_2d),
+                    }
+                )
+        cf_records.append(records)
+
+    return {
+        "num": counts,
+        "cf_sets": cf_sets,
+        "cf_records": cf_records,
+        "diversity": diversity_values,
+        "count_diversity": count_diversity_values,
+    }
+
+
+def _aggregate_figure4_metrics(primary: dict, secondary: dict) -> dict[str, float]:
+    distance: list[float] = []
+    proximity: list[float] = []
+    sparsity: list[float] = []
+    aps: list[float] = []
+
+    for cf_records, cf_a, cf_b in zip(
+        primary["cf_records"],
+        primary["cf_sets"],
+        secondary["cf_sets"],
+        strict=False,
+    ):
+        for record in cf_records:
+            proximity.append(float(record["proximity"]))
+            sparsity.append(float(record["sparsity"]))
+            aps.append(float(record["aps"]))
+        if cf_a.shape[0] > 0 and cf_b.shape[0] > 0:
+            distance.append(_hausdorff_score(cf_a, cf_b))
+
+    diversity = np.asarray(primary["diversity"], dtype=np.float64)
+    diversity2 = np.asarray(secondary["diversity"], dtype=np.float64)
+    count_diversity = np.asarray(primary["count_diversity"], dtype=np.float64)
+    count_diversity2 = np.asarray(secondary["count_diversity"], dtype=np.float64)
+
+    diversity = diversity[diversity != -1.0]
+    diversity2 = diversity2[diversity2 != -1.0]
+    count_diversity = count_diversity[count_diversity != -1.0]
+    count_diversity2 = count_diversity2[count_diversity2 != -1.0]
+
+    return {
+        "num_factuals": float(len(primary["num"])),
+        "num_with_cf": float(sum(count > 0 for count in primary["num"])),
+        "mean_num_cf": float(np.mean(primary["num"])) if primary["num"] else float("nan"),
+        "median_num_cf": float(np.median(primary["num"])) if primary["num"] else float("nan"),
+        "mean_sparsity": float(np.mean(_percent_range(sparsity)))
+        if sparsity
+        else float("nan"),
+        "mean_aps": float(np.mean(_percent_range(aps))) if aps else float("nan"),
+        "mean_proximity": float(np.mean(_percent_range(proximity)))
+        if proximity
+        else float("nan"),
+        "mean_diversity": float(np.mean(_percent_range(diversity)))
+        if diversity.size > 0
+        else float("nan"),
+        "mean_diversity2": float(np.mean(_percent_range(diversity2)))
+        if diversity2.size > 0
+        else float("nan"),
+        "mean_inconsistency": float(np.mean(_percent_range(distance)))
+        if distance
+        else float("nan"),
+        "mean_count_diversity": float(np.mean(_percent_range(count_diversity)))
+        if count_diversity.size > 0
+        else float("nan"),
+        "mean_count_diversity2": float(np.mean(_percent_range(count_diversity2)))
+        if count_diversity2.size > 0
+        else float("nan"),
+    }
+
+
+def _print_metric(name: str, value: float, reference: float | None = None) -> None:
+    if reference is None or not np.isfinite(reference):
+        print(f"{name}: {value:.6f}")
+        return
+    delta = value - reference
+    print(f"{name}: {value:.6f} | reference: {reference:.6f} | delta: {delta:+.6f}")
 
 
 def main() -> None:
@@ -272,129 +388,142 @@ def main() -> None:
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     config_path = (PROJECT_ROOT / args.config).resolve()
-    config = _apply_device(_normalize_config(_load_config(config_path)), device)
+    config = _apply_device(_load_config(config_path), device)
+
+    reproduction_cfg = deepcopy(config["reproduction"])
+    desired_class = reproduction_cfg.get("desired_class", config["method"]["desired_class"])
+    model_seeds = list(reproduction_cfg.get("model_seeds", [config["model"]["seed"], int(config["model"]["seed"]) + 1]))
+    if len(model_seeds) != 2:
+        raise ValueError("reproduction.model_seeds must contain exactly two seeds")
 
     raw_dataset = _build_dataset(config)
-    split_seed = int(config["reproduction"]["split_seed"])
+    split_seed = int(reproduction_cfg["split_seed"])
     trainset_raw, testset_raw = _materialize_reference_split(raw_dataset, split_seed)
     trainset, testset, scaler = _scale_reference_split(trainset_raw, testset_raw)
 
-    model_a = _build_model(config)
+    model_a = _build_model(config, seed=int(model_seeds[0]))
     model_a.fit(trainset)
     metrics_a = _compute_model_metrics(model_a, testset)
 
-    model_b_cfg = deepcopy(config)
-    model_b_cfg["model"]["seed"] = int(model_b_cfg["model"]["seed"]) + 1
-    model_b = _build_model(model_b_cfg)
+    model_b = _build_model(config, seed=int(model_seeds[1]))
     model_b.fit(trainset)
     metrics_b = _compute_model_metrics(model_b, testset)
 
     abnormal_test, normal_train = _collect_reference_sets(model_a, trainset, testset)
+    if abnormal_test.shape[0] == 0:
+        raise RuntimeError("No true-negative Hepatitis test instances were found")
+    if normal_train.shape[0] == 0:
+        raise RuntimeError("No true-positive Hepatitis train instances were found")
     if args.max_factuals is not None:
         abnormal_test = abnormal_test[: int(args.max_factuals)]
 
-    evaluator = _Evaluator(
+    evaluator = _ReferenceEvaluator(
         trainset.get(target=False).to_numpy(dtype=np.float64),
         normal_train.astype(np.float64),
     )
 
-    normal_range = np.array(
+    feature_columns = trainset.get(target=False).columns
+    normal_range = pd.DataFrame(
         [
-            config["reproduction"]["normal_range"]["lower"],
-            config["reproduction"]["normal_range"]["upper"],
+            reproduction_cfg["normal_range"]["lower"],
+            reproduction_cfg["normal_range"]["upper"],
         ],
+        columns=feature_columns,
         dtype=np.float64,
     )
     normal_range = scaler.transform(normal_range).astype(np.float64)
-    lower_bounds = normal_range[0:1, :]
-    upper_bounds = normal_range[1:2, :]
+    normal_range *= float(reproduction_cfg.get("normal_range_scale", 1.0))
+    lower_bounds = normal_range[0]
+    upper_bounds = normal_range[1]
 
-    method = _build_method(
+    method_a = _build_method(
         config,
         model_a,
-        explicit_lower_bounds=lower_bounds.reshape(-1),
-        explicit_upper_bounds=upper_bounds.reshape(-1),
+        explicit_lower_bounds=lower_bounds,
+        explicit_upper_bounds=upper_bounds,
     )
-    method.fit(trainset)
-    counts, cf_sets = _run_cemsp_for_model(
-        method, model_a, abnormal_test, lower_bounds, upper_bounds
+    method_a.fit(trainset)
+    primary_result = _run_cemsp_for_model(
+        method_a,
+        evaluator,
+        abnormal_test,
+        desired_class=desired_class,
+        collect_metrics=True,
     )
 
     method_b = _build_method(
         config,
         model_b,
-        explicit_lower_bounds=lower_bounds.reshape(-1),
-        explicit_upper_bounds=upper_bounds.reshape(-1),
+        explicit_lower_bounds=lower_bounds,
+        explicit_upper_bounds=upper_bounds,
     )
     method_b.fit(trainset)
-    _, cf_sets_b = _run_cemsp_for_model(
-        method_b, model_b, abnormal_test, lower_bounds, upper_bounds
+    secondary_result = _run_cemsp_for_model(
+        method_b,
+        evaluator,
+        abnormal_test,
+        desired_class=desired_class,
+        collect_metrics=False,
     )
 
-    sparsity_list = []
-    aps_list = []
-    proximity_list = []
-    diversity_list = []
-    diversity2_list = []
-    inconsistency_list = []
-    count_diversity_list = []
-    count_diversity2_list = []
+    aggregated = _aggregate_figure4_metrics(primary_result, secondary_result)
+    reference_model = reproduction_cfg.get("reference_model", {})
+    reference_metrics = reproduction_cfg.get("reference_metrics", {})
 
-    for input_x, cf_a, cf_b in zip(abnormal_test, cf_sets, cf_sets_b, strict=False):
-        if cf_a.shape[0] > 0:
-            sparsity_list.append(evaluator.sparsity(input_x.reshape(1, -1), cf_a))
-            aps_list.append(evaluator.average_percentile_shift(input_x.reshape(1, -1), cf_a))
-            proximity_list.append(evaluator.proximity(cf_a))
-            diversity_list.append(evaluator.diversity(cf_a))
-            count_diversity_list.append(evaluator.count_diversity(cf_a))
-        if cf_b.shape[0] > 0:
-            diversity2_list.append(evaluator.diversity(cf_b))
-            count_diversity2_list.append(evaluator.count_diversity(cf_b))
-        if cf_a.shape[0] > 0 and cf_b.shape[0] > 0:
-            inconsistency_list.append(_hausdorff_score(cf_a, cf_b))
-
-    diversity_valid = [value for value in diversity_list if value != -1]
-    diversity2_valid = [value for value in diversity2_list if value != -1]
-    count_diversity_valid = [value for value in count_diversity_list if value != -1]
-    count_diversity2_valid = [value for value in count_diversity2_list if value != -1]
-    inconsistency_valid = _percent_range(inconsistency_list)
-    sparsity_valid = _percent_range(sparsity_list)
-    aps_valid = _percent_range(aps_list)
-    proximity_valid = _percent_range(proximity_list)
-    diversity_valid = _percent_range(diversity_valid)
-    diversity2_valid = _percent_range(diversity2_valid)
-    count_diversity_valid = _percent_range(count_diversity_valid)
-    count_diversity2_valid = _percent_range(count_diversity2_valid)
-
-    print("CEMSP Hepatitis Reproduction")
+    print("CEMSP Hepatitis Figure 4 Reproduction")
     print(f"device: {device}")
-    print(f"train_rows: {len(trainset)}")
-    print(f"test_rows: {len(testset)}")
-    print(f"model_a_test_accuracy: {metrics_a['test_accuracy']:.4f}")
-    print(f"model_a_test_f1: {metrics_a['test_f1']:.4f}")
-    print(f"model_b_test_accuracy: {metrics_b['test_accuracy']:.4f}")
-    print(f"model_b_test_f1: {metrics_b['test_f1']:.4f}")
-    print(f"num_abnormal_factuals: {len(abnormal_test)}")
-    print(f"num_with_cf: {int(sum(count > 0 for count in counts))}")
-    print(f"mean_num_cf: {float(np.mean(counts)) if counts else float('nan'):.4f}")
-    print(f"median_num_cf: {float(np.median(counts)) if counts else float('nan'):.4f}")
-    print(f"mean_sparsity: {float(np.mean(sparsity_valid)) if len(sparsity_valid) > 0 else float('nan'):.4f}")
-    print(f"mean_aps: {float(np.mean(aps_valid)) if len(aps_valid) > 0 else float('nan'):.4f}")
-    print(f"mean_proximity: {float(np.mean(proximity_valid)) if len(proximity_valid) > 0 else float('nan'):.4f}")
-    print(f"mean_diversity: {float(np.mean(diversity_valid)) if len(diversity_valid) > 0 else float('nan'):.4f}")
-    print(f"mean_diversity2: {float(np.mean(diversity2_valid)) if len(diversity2_valid) > 0 else float('nan'):.4f}")
-    print(f"mean_inconsistency: {float(np.mean(inconsistency_valid)) if len(inconsistency_valid) > 0 else float('nan'):.4f}")
-    print(f"mean_count_diversity: {float(np.mean(count_diversity_valid)) if len(count_diversity_valid) > 0 else float('nan'):.4f}")
-    print(f"mean_count_diversity2: {float(np.mean(count_diversity2_valid)) if len(count_diversity2_valid) > 0 else float('nan'):.4f}")
+    print(f"split_seed: {split_seed}")
+    print(f"model_seeds: {model_seeds}")
+    if "reference_source" in reproduction_cfg:
+        print(f"reference_source: {reproduction_cfg['reference_source']}")
+    print(f"num_abnormal_factuals: {int(aggregated['num_factuals'])}")
+    if args.max_factuals is not None:
+        print("subset_run: true")
+        print("subset_note: reference comparisons below are for the full original setting")
 
+    print()
+    print("Model Metrics")
+    _print_metric(
+        "model_a_test_accuracy",
+        metrics_a["test_accuracy"],
+        float(reference_model.get("test_accuracy", float("nan"))),
+    )
+    _print_metric(
+        "model_a_test_f1",
+        metrics_a["test_f1"],
+        float(reference_model.get("test_f1", float("nan"))),
+    )
+    _print_metric(
+        "model_b_test_accuracy",
+        metrics_b["test_accuracy"],
+        float(reference_model.get("test_accuracy", float("nan"))),
+    )
+    _print_metric(
+        "model_b_test_f1",
+        metrics_b["test_f1"],
+        float(reference_model.get("test_f1", float("nan"))),
+    )
 
-def _normalize_config(config: dict) -> dict:
-    cfg = deepcopy(config)
-    preprocess_cfg = list(cfg.get("preprocess", []))
-    if not any(item.get("name", "").lower() == "finalize" for item in preprocess_cfg):
-        preprocess_cfg.append({"name": "finalize"})
-    cfg["preprocess"] = preprocess_cfg
-    return cfg
+    print()
+    print("Figure 4 HCV Metrics")
+    for key in [
+        "num_with_cf",
+        "mean_num_cf",
+        "median_num_cf",
+        "mean_sparsity",
+        "mean_aps",
+        "mean_proximity",
+        "mean_diversity",
+        "mean_diversity2",
+        "mean_inconsistency",
+        "mean_count_diversity",
+        "mean_count_diversity2",
+    ]:
+        _print_metric(
+            key,
+            float(aggregated[key]),
+            float(reference_metrics.get(key, float("nan"))),
+        )
 
 
 if __name__ == "__main__":
