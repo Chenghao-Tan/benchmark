@@ -36,3 +36,9 @@ method:
 evaluation:
   - name: validity
   - name: distance
+
+# Optional overrides for extended metrics (see evaluation/per_instance.py defaults)
+evaluation_full:
+  fairness:
+    protected_feature: null
+  action_cost_weights: {}
