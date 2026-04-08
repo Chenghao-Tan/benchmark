@@ -1,0 +1,38 @@
+name: toydata_linear_toy_reproduce
+logger:
+  level: INFO
+  path: ./logs/toydata_linear_toy_reproduce.log
+caching:
+  path: ./cache/
+dataset:
+  name: toydata
+preprocess:
+  - name: scale
+    seed: 7
+    scaling: standardize
+    range: true
+  - name: split
+    seed: 7
+    split: 0.25
+model:
+  name: linear
+  seed: 7
+  device: cpu
+  epochs: 180
+  learning_rate: 0.03
+  batch_size: 8
+  optimizer: adam
+  criterion: cross_entropy
+  save_name: toydata_linear
+method:
+  name: toy
+  seed: 7
+  device: cpu
+  desired_class: 1
+  max_iterations: 300
+  step_size: 0.05
+  lambda_: 0.08
+  clamp: true
+evaluation:
+  - name: validity
+  - name: distance

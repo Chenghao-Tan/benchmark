@@ -5,3 +5,5 @@ logs/
 tmp/
 reference/
 AGENTS.md
+results/**/raw/
+venv12/

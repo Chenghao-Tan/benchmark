@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import argparse
 import logging
+import subprocess
+import sys
 from copy import deepcopy
+from pathlib import Path
 
 import pandas as pd
 import yaml
@@ -13,6 +16,13 @@ import evaluation  # noqa: F401
 import method  # noqa: F401
 import model  # noqa: F401
 import preprocess  # noqa: F401
+from dataset.dataset_object import DatasetObject
+from evaluation.aggregate_results import write_eval_outputs
+from evaluation.per_instance import (
+    default_evaluation_full_config,
+    merge_eval_full_config,
+    evaluate_instances,
+)
 from utils.caching import set_cache_dir
 from utils.logger import setup_logger
 from utils.registry import get_registry
@@ -177,7 +187,23 @@ class Experiment:
 
         self._fatal("Could not resolve train/test datasets after preprocessing")
 
-    def run(self) -> pd.DataFrame:
+    @staticmethod
+    def _subset_dataset_rows(dataset: DatasetObject, positions: list[int]) -> DatasetObject:
+        """Row subset for faster eval; clone → replace df → freeze."""
+        subset = dataset.clone()
+        full_df = subset.snapshot()
+        sub_df = full_df.iloc[positions].copy(deep=True)
+        subset.update("eval_row_subset", positions, df=sub_df)
+        subset.freeze()
+        return subset
+
+    def run(
+        self,
+        eval_full: bool = False,
+        sample_instances: int | None = None,
+        results_dir: str | Path | None = None,
+        launch_dashboard: bool = False,
+    ) -> pd.DataFrame:
         datasets = [self._raw_dataset]
 
         for preprocess_step in self._preprocess:
@@ -211,6 +237,10 @@ class Experiment:
         self._logger.info("Completed recourse method training")
 
         factuals = testset
+        if sample_instances is not None:
+            n = max(1, min(int(sample_instances), len(factuals)))
+            factuals = self._subset_dataset_rows(testset, list(range(n)))
+            self._logger.info("Evaluating on first %s test instances", n)
 
         self._logger.info("Generating counterfactuals")
         counterfactuals = self._method.predict(factuals)
@@ -239,6 +269,48 @@ class Experiment:
             self._logger.warning("Metrics changed for columns: %s", changed_columns)
 
         self._metrics = metrics
+
+        if eval_full:
+            rdir = Path(results_dir or "./results/")
+            eval_cfg = merge_eval_full_config(
+                default_evaluation_full_config(),
+                self._cfg.get("evaluation_full"),
+            )
+            ds_name = self._cfg["dataset"].get("name", "dataset")
+            md_name = self._cfg["model"].get("name", "model")
+            mt_name = self._cfg["method"].get("name", "method")
+            self._logger.info("Running full per-instance evaluation → %s", rdir)
+            records = evaluate_instances(
+                factuals,
+                counterfactuals,
+                trainset,
+                self._target_model,
+                self._method,
+                eval_cfg,
+                instance_indices=None,
+                base_seed=self._cfg.get("method", {}).get("seed"),
+            )
+            raw_p, sum_p = write_eval_outputs(
+                records, rdir, ds_name, md_name, mt_name
+            )
+            self._logger.info("Saved instance metrics to %s", raw_p)
+            self._logger.info("Saved summary to %s", sum_p)
+
+            if launch_dashboard:
+                dash = Path(__file__).resolve().parent / "visualization" / "dashboard.py"
+                cmd = [
+                    sys.executable,
+                    "-m",
+                    "streamlit",
+                    "run",
+                    str(dash),
+                    "--",
+                    "--results_dir",
+                    str(rdir.resolve()),
+                ]
+                self._logger.info("Launching dashboard: %s", " ".join(cmd))
+                subprocess.Popen(cmd)
+
         return metrics
 
     def metrics(self, run: bool = True) -> pd.DataFrame | None:
@@ -258,6 +330,29 @@ class Experiment:
 def run_experiment(config_path: str | None = None):
     parser = argparse.ArgumentParser()
     parser.add_argument("-p", "--path", default=None)
+    parser.add_argument(
+        "--eval-full",
+        action="store_true",
+        help="Run extended per-instance metrics and save JSON + Parquet under results/",
+    )
+    parser.add_argument(
+        "--sample",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Use only the first N test instances (counterfactuals + full eval)",
+    )
+    parser.add_argument(
+        "--results-dir",
+        type=str,
+        default="./results/",
+        help="Output directory for raw JSON and summary Parquet",
+    )
+    parser.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="After eval-full, launch Streamlit dashboard (non-blocking)",
+    )
     args = parser.parse_args()
 
     if config_path is not None and args.path is not None:
@@ -285,7 +380,12 @@ def run_experiment(config_path: str | None = None):
         raise SystemExit(1)
 
     experiment = Experiment(config)
-    metrics = experiment.run()
+    metrics = experiment.run(
+        eval_full=args.eval_full,
+        sample_instances=args.sample,
+        results_dir=args.results_dir,
+        launch_dashboard=args.dashboard,
+    )
     logging.getLogger(__name__).info("Experiment completed successfully")
     print(metrics.to_string(index=False))
 
