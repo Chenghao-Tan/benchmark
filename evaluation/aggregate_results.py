@@ -135,7 +135,11 @@ def attach_composite(summary: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def save_instances_json(records: list[dict[str, Any]], path: Path) -> None:
+def save_instances_json(
+    records: list[dict[str, Any]],
+    path: Path,
+    metadata: dict[str, Any] | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     def convert(o: Any) -> Any:
@@ -152,8 +156,14 @@ def save_instances_json(records: list[dict[str, Any]], path: Path) -> None:
             return [convert(v) for v in o]
         return o
 
+    payload: Any
+    if metadata:
+        payload = {"metadata": convert(metadata), "instances": convert(records)}
+    else:
+        payload = convert(records)
+
     with path.open("w", encoding="utf-8") as f:
-        json.dump(convert(records), f, indent=2)
+        json.dump(payload, f, indent=2)
 
 
 def save_summary_parquet(summary: pd.DataFrame, path: Path) -> None:
@@ -171,12 +181,33 @@ def write_eval_outputs(
     dataset: str,
     model: str,
     method: str,
+    *,
+    experiment_name: str | None = None,
+    sample_instances: int | None = None,
+    device: str | None = None,
+    config_snapshot: dict[str, Any] | None = None,
 ) -> tuple[Path, Path]:
     base = result_basename(dataset, model, method)
     raw_path = results_dir / "raw" / f"{base}_instances.json"
     summ_path = results_dir / "summary" / f"{base}.parquet"
-    save_instances_json(records, raw_path)
+    metadata: dict[str, Any] = {
+        "dataset": dataset,
+        "model": model,
+        "method": method,
+        "bundle_id": base,
+        "experiment_name": experiment_name or "",
+        "n_instances": len(records),
+        "sample_instances": sample_instances,
+        "device": device or "",
+    }
+    if config_snapshot:
+        metadata["config_snapshot"] = config_snapshot
+    save_instances_json(records, raw_path, metadata=metadata)
     summary = attach_composite(records_to_summary_frame(records))
     summary["bundle_id"] = base
+    summary["dataset"] = dataset
+    summary["model"] = model
+    summary["method"] = method
+    summary["experiment_name"] = experiment_name or ""
     save_summary_parquet(summary, summ_path)
     return raw_path, summ_path

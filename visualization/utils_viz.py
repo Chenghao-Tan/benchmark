@@ -33,8 +33,45 @@ def list_summary_parquets(results_dir: Path) -> list[Path]:
 
 
 def load_instances(path: Path) -> list[dict[str, Any]]:
+    """Legacy helper: returns instance list only (see load_run_bundle for metadata)."""
+    bundle = load_run_bundle(path)
+    return bundle["instances"]
+
+
+def load_run_bundle(path: Path) -> dict[str, Any]:
+    """
+    Load `*_instances.json`. Supports:
+    - wrapped: {"metadata": {...}, "instances": [...]}
+    - legacy: flat list of instance dicts
+    """
     with path.open("r", encoding="utf-8") as f:
-        return json.load(f)
+        raw = json.load(f)
+    if isinstance(raw, list):
+        return {"metadata": None, "instances": raw}
+    if isinstance(raw, dict):
+        meta = raw.get("metadata")
+        inst = raw.get("instances")
+        if isinstance(inst, list):
+            return {"metadata": meta, "instances": inst}
+    return {"metadata": None, "instances": []}
+
+
+def format_run_label(path: Path, metadata: dict[str, Any] | None) -> str:
+    """Human-readable selector label: dataset | model | method (experiment)."""
+    stem = path.stem.replace("_instances", "")
+    if not metadata:
+        return stem
+    ds = metadata.get("dataset") or "?"
+    md = metadata.get("model") or "?"
+    mt = metadata.get("method") or "?"
+    ex = (metadata.get("experiment_name") or "").strip()
+    n = metadata.get("n_instances")
+    parts = [f"{ds} | {md} | {mt}"]
+    if ex:
+        parts.append(f"({ex})")
+    if n is not None:
+        parts.append(f"n={n}")
+    return " ".join(parts)
 
 
 def load_all_summaries(paths: list[Path]) -> pd.DataFrame:

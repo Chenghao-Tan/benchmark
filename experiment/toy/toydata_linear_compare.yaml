@@ -1,0 +1,52 @@
+# Base config for multi-method compare (toydata + linear classifier).
+# Use with: python run_compare_methods.py --config experiment/toy/toydata_linear_compare.yaml --preset toy_linear --output results/compare_toy/
+#
+# Keep `method` minimal: only seed / device / desired_class are shared; --preset toy_linear
+# supplies per-method hyperparameters.
+
+name: toydata_linear_compare
+logger:
+  level: INFO
+  path: ./logs/toydata_linear_compare.log
+caching:
+  path: ./cache/
+dataset:
+  name: toydata
+preprocess:
+  - name: scale
+    seed: 7
+    scaling: standardize
+    range: true
+  - name: split
+    seed: 7
+    split: 0.25
+model:
+  name: linear
+  seed: 7
+  device: cpu
+  epochs: 180
+  learning_rate: 0.03
+  batch_size: 8
+  optimizer: adam
+  criterion: cross_entropy
+  save_name: toydata_linear
+method:
+  name: toy
+  seed: 7
+  device: cpu
+  desired_class: 1
+evaluation:
+  - name: validity
+  - name: distance
+evaluation_full:
+  fairness:
+    protected_feature: null
+  action_cost_weights: {}
+  reliability:
+    skip_ris: true
+    pgi_m: 12
+    ros_m: 8
+  robustness:
+    n_trials: 8
+  temporal_decay:
+    n_steps: 5

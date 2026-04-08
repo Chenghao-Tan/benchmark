@@ -1,0 +1,60 @@
+# German Credit (in-repo CSV, ~1k rows) + linear model + GS recourse.
+# For richer UMAP: many factual/CF pairs in feature space.
+#
+# Run (150 test instances -> ~300 UMAP points):
+#   python main.py -p experiment/german/german_linear_gs_umap_demo.yaml --eval-full --sample 150 --results-dir results/german_umap/
+
+name: german_linear_gs_umap_demo
+logger:
+  level: INFO
+  path: ./logs/german_linear_gs_umap_demo.log
+caching:
+  path: ./cache/
+dataset:
+  name: german
+preprocess:
+  - name: encode
+    seed: 11
+    encoding: onehot
+  - name: scale
+    seed: 11
+    scaling: standardize
+    range: true
+  - name: split
+    seed: 11
+    split: 0.2
+  - name: finalize
+model:
+  name: linear
+  seed: 11
+  device: cpu
+  epochs: 120
+  learning_rate: 0.05
+  batch_size: 32
+  optimizer: adam
+  criterion: cross_entropy
+  save_name: german_linear_umap_demo
+method:
+  name: gs
+  seed: 11
+  device: cpu
+  desired_class: 1
+  n_search_samples: 300
+  p_norm: 2
+  step: 0.2
+  max_iter: 600
+evaluation:
+  - name: validity
+  - name: distance
+evaluation_full:
+  fairness:
+    protected_feature: null
+  action_cost_weights: {}
+  reliability:
+    skip_ris: true
+    pgi_m: 8
+    ros_m: 6
+  robustness:
+    n_trials: 5
+  temporal_decay:
+    n_steps: 4

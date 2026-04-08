@@ -6,4 +6,5 @@ tmp/
 reference/
 AGENTS.md
 results/**/raw/
+visualization/outputs/*.html
 venv12/

@@ -22,7 +22,8 @@ def process_nan():
             y = func(self, X_work, *args, **kwargs)
             if nan_rows.any():
                 y = y.clone()
-                y[nan_rows.to_numpy()] = -1
+                mask = np.asarray(nan_rows, dtype=bool).copy()
+                y[mask] = -1
             return y
 
         return wrapper

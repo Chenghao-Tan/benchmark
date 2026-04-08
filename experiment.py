@@ -279,7 +279,7 @@ class Experiment:
             ds_name = self._cfg["dataset"].get("name", "dataset")
             md_name = self._cfg["model"].get("name", "model")
             mt_name = self._cfg["method"].get("name", "method")
-            self._logger.info("Running full per-instance evaluation → %s", rdir)
+            self._logger.info("Running full per-instance evaluation -> %s", rdir)
             records = evaluate_instances(
                 factuals,
                 counterfactuals,
@@ -291,7 +291,19 @@ class Experiment:
                 base_seed=self._cfg.get("method", {}).get("seed"),
             )
             raw_p, sum_p = write_eval_outputs(
-                records, rdir, ds_name, md_name, mt_name
+                records,
+                rdir,
+                ds_name,
+                md_name,
+                mt_name,
+                experiment_name=self._cfg.get("name"),
+                sample_instances=sample_instances,
+                device=self._cfg["model"].get("device"),
+                config_snapshot={
+                    "dataset": deepcopy(self._cfg.get("dataset", {})),
+                    "model": deepcopy(self._cfg.get("model", {})),
+                    "method": deepcopy(self._cfg.get("method", {})),
+                },
             )
             self._logger.info("Saved instance metrics to %s", raw_p)
             self._logger.info("Saved summary to %s", sum_p)

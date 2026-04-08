@@ -25,7 +25,7 @@ from evaluation.instance_metrics import (
     memory_peak_mb_sample,
 )
 from evaluation.reliability_metrics import compute_all_reliability
-from evaluation.evaluation_utils import resolve_feature_metadata
+from preprocess.preprocess_utils import resolve_feature_metadata
 from method.method_object import MethodObject
 from model.model_object import ModelObject
 
