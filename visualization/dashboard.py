@@ -109,7 +109,15 @@ def main() -> None:
         if summary_all.empty:
             st.info("No summary Parquet found.")
         else:
-            st.plotly_chart(fig_reliability_heatmap(summary_all.head(1)), use_container_width=True)
+            fh = fig_reliability_heatmap(summary_all.head(1))
+            st.plotly_chart(fh, use_container_width=True)
+            try:
+                from streamlit_plotly_events import plotly_events
+
+                st.caption("Click a heatmap cell (when supported):")
+                plotly_events(fh, click_event=True, hover_event=False, select_event=False)
+            except ImportError:
+                pass
         st.caption("Live perturbation simulator: use Instance browser + re-run pipeline for full fidelity.")
 
     with tab_inst:
