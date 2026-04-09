@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Recourse Benchmark Live</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <p class="eyebrow">Recourse Benchmark</p>
+      <h1>Method Selector Dashboard</h1>
+      <p class="subtitle">
+        Choose dataset, model, metrics, and constraints to rank the best methods from available benchmark results.
+      </p>
+      <p class="hint">
+        GitHub Pages support: yes (static dashboard). Running brand-new experiments from the site requires backend compute.
+      </p>
+    </header>
+
+    <section class="panel controls">
+      <div class="grid two">
+        <label>
+          Dataset
+          <select id="datasetSelect"></select>
+        </label>
+
+        <label>
+          Model
+          <select id="modelSelect"></select>
+        </label>
+      </div>
+
+      <label>
+        Methods (optional, multi-select)
+        <select id="methodSelect" multiple size="6"></select>
+      </label>
+
+      <div class="uploadRow">
+        <label for="configUpload" class="uploadLabel">Upload YAML Config</label>
+        <input id="configUpload" type="file" accept=".yaml,.yml" />
+        <span id="configStatus" class="configStatus">No config uploaded.</span>
+      </div>
+
+      <h2>Metrics & Constraints</h2>
+      <p class="small">Use checkbox to include metric in ranking. Add optional min/max constraints.</p>
+      <div id="metricEditor" class="metricEditor"></div>
+
+      <div class="actions">
+        <button id="rankBtn" type="button">Rank Methods</button>
+        <button id="resetBtn" type="button" class="ghost">Reset Filters</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Top Methods</h2>
+      <div id="topCards" class="cards"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Ranking Table</h2>
+      <div id="summary" class="summary"></div>
+      <div class="tableWrap">
+        <table id="resultTable">
+          <thead></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

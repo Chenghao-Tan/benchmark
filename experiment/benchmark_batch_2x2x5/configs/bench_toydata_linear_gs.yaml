@@ -1,0 +1,48 @@
+name: bench_toydata_linear_gs
+logger:
+  level: INFO
+  path: ./logs/benchmark_batch_2x2x5/bench_toydata_linear_gs.log
+caching:
+  path: ./cache/benchmark_batch_2x2x5/
+dataset:
+  name: toydata
+preprocess:
+- name: scale
+  seed: 42
+  scaling: standardize
+  range: true
+- name: split
+  seed: 42
+  split: 0.2
+  sample: 5
+model:
+  name: linear
+  seed: 42
+  device: cpu
+  epochs: 80
+  learning_rate: 0.01
+  batch_size: 32
+  optimizer: adam
+  criterion: cross_entropy
+  output_activation: softmax
+method:
+  name: gs
+  seed: 42
+  device: cpu
+  desired_class: 1
+  n_search_samples: 300
+  p_norm: 2
+  step: 0.15
+  max_iter: 200
+evaluation:
+- name: validity
+- name: distance
+  metrics:
+  - l0
+  - l1
+  - l2
+  - linf
+- name: ynn
+  k: 5
+- name: runtime
+

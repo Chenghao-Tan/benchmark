@@ -1,3 +1,5 @@
 from evaluation.distance import DistanceEvaluation
 from evaluation.evaluation_object import EvaluationObject
+from evaluation.runtime import RuntimeEvaluation
 from evaluation.validity import ValidityEvaluation
+from evaluation.ynn import YnnEvaluation
