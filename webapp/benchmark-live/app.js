@@ -1,9 +1,17 @@
-const DATA_PATH = "data/benchmark_results.csv";
+
+const LOCAL_DATA_PATH = "data/benchmark_results.csv";
 
 const state = {
   rows: [],
   metricNames: [],
   directions: {},
+  backendAvailable: false,
+  uploadedYamlText: null,
+  options: {
+    datasets: [],
+    models: [],
+    methods: [],
+  },
 };
 
 const els = {
@@ -11,15 +19,31 @@ const els = {
   modelSelect: document.getElementById("modelSelect"),
   methodSelect: document.getElementById("methodSelect"),
   metricEditor: document.getElementById("metricEditor"),
+  runMetricEditor: document.getElementById("runMetricEditor"),
   rankBtn: document.getElementById("rankBtn"),
   resetBtn: document.getElementById("resetBtn"),
+  reloadBtn: document.getElementById("reloadBtn"),
+  runSelectionBtn: document.getElementById("runSelectionBtn"),
+  runConfigBtn: document.getElementById("runConfigBtn"),
   tableHead: document.querySelector("#resultTable thead"),
   tableBody: document.querySelector("#resultTable tbody"),
   summary: document.getElementById("summary"),
   topCards: document.getElementById("topCards"),
   configUpload: document.getElementById("configUpload"),
   configStatus: document.getElementById("configStatus"),
+  jobStatus: document.getElementById("jobStatus"),
+  modeHint: document.getElementById("modeHint"),
 };
+
+const RUN_METRIC_CATALOG = [
+  "validity",
+  "distance_l0",
+  "distance_l1",
+  "distance_l2",
+  "distance_linf",
+  "ynn",
+  "runtime_seconds",
+];
 
 function parseNumber(value) {
   const n = Number(value);
@@ -101,6 +125,25 @@ function buildMetricEditor() {
   });
 }
 
+function buildRunMetricEditor() {
+  els.runMetricEditor.innerHTML = "";
+  const runMetrics = RUN_METRIC_CATALOG.filter((m) => state.metricNames.includes(m) || ["validity", "ynn", "runtime_seconds"].includes(m));
+  runMetrics.forEach((metric) => {
+    const row = document.createElement("div");
+    row.className = "metricRow";
+    row.dataset.metric = metric;
+    const checked = ["validity", "distance_l1", "distance_l2", "ynn", "runtime_seconds"].includes(metric);
+    row.innerHTML = `
+      <label class="metricName">
+        <input type="checkbox" class="run-metric-use" ${checked ? "checked" : ""} />
+        <span>${metric}</span>
+      </label>
+      <div></div><div></div><div></div><div></div>
+    `;
+    els.runMetricEditor.appendChild(row);
+  });
+}
+
 function collectMetricConfig() {
   return [...els.metricEditor.querySelectorAll(".metricRow")].map((row) => {
     const metric = row.dataset.metric;
@@ -119,6 +162,12 @@ function collectMetricConfig() {
       max: Number.isFinite(maxVal) ? maxVal : null,
     };
   });
+}
+
+function collectRunMetrics() {
+  return [...els.runMetricEditor.querySelectorAll(".metricRow")]
+    .filter((row) => row.querySelector(".run-metric-use").checked)
+    .map((row) => row.dataset.metric);
 }
 
 function aggregateByMethod(rows, metrics) {
@@ -152,7 +201,6 @@ function applyConstraints(rows, metricConfig) {
     return true;
   });
 }
-
 function scoreMethods(methodRows, selectedMetrics) {
   const ranges = {};
   selectedMetrics.forEach((cfg) => {
@@ -223,31 +271,29 @@ function renderCards(rows, selectedMetrics) {
   });
 }
 
+function formatCell(val) {
+  if (typeof val === "number") return Number.isFinite(val) ? val.toFixed(4) : "";
+  const parsed = parseNumber(val);
+  if (Number.isFinite(parsed)) return parsed.toFixed(4);
+  return String(val ?? "");
+}
+
 function renderTable(rows, selectedMetrics) {
   const columns = ["rank", "method", "score", "count", ...selectedMetrics.map((m) => m.metric)];
 
   els.tableHead.innerHTML = `<tr>${columns.map((c) => `<th>${c}</th>`).join("")}</tr>`;
 
   els.tableBody.innerHTML = rows
-    .map((row) => {
-      return `<tr>${columns
-        .map((col) => {
-          const val = row[col];
-          const text = Number.isFinite(val) ? Number(val).toFixed(4) : String(val ?? "");
-          return `<td>${text}</td>`;
-        })
-        .join("")}</tr>`;
-    })
+    .map((row) => `<tr>${columns.map((col) => `<td>${formatCell(row[col])}</td>`).join("")}</tr>`)
     .join("");
 }
-
 function rankMethods() {
   const dataset = els.datasetSelect.value;
   const model = els.modelSelect.value;
   const selectedMethods = getSelectedMethods();
   const metricConfig = collectMetricConfig();
-
   const selectedMetrics = metricConfig.filter((m) => m.use);
+
   if (!selectedMetrics.length) {
     els.summary.textContent = "Select at least one ranking metric.";
     els.tableHead.innerHTML = "";
@@ -297,11 +343,6 @@ function applyConfigToUI(config) {
     }
   }
 
-  const rows = [...els.metricEditor.querySelectorAll(".metricRow")];
-  rows.forEach((row) => {
-    row.querySelector(".metric-use").checked = false;
-  });
-
   const evalList = Array.isArray(config?.evaluation) ? config.evaluation : [];
   const metricSet = new Set();
 
@@ -316,14 +357,112 @@ function applyConfigToUI(config) {
     }
   });
 
-  rows.forEach((row) => {
-    const metric = row.dataset.metric;
-    if (metricSet.has(metric)) {
-      row.querySelector(".metric-use").checked = true;
+  [...els.runMetricEditor.querySelectorAll(".metricRow")].forEach((row) => {
+    const checkbox = row.querySelector(".run-metric-use");
+    if (metricSet.size) {
+      checkbox.checked = metricSet.has(row.dataset.metric);
     }
   });
 }
+function updateJobStatus(text) {
+  els.jobStatus.textContent = text;
+}
 
+async function postJson(url, body) {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(text || `HTTP ${response.status}`);
+  }
+  return response.json();
+}
+
+async function pollJob(jobId) {
+  let keepPolling = true;
+  while (keepPolling) {
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    const response = await fetch(`/api/jobs/${jobId}`);
+    if (!response.ok) {
+      updateJobStatus(`Job ${jobId}: status check failed (${response.status}).`);
+      return;
+    }
+    const payload = await response.json();
+    const progress = payload.progress || {};
+    updateJobStatus(
+      `Job ${jobId}\nstatus: ${payload.status}\ncompleted: ${progress.completed ?? 0}/${progress.total ?? 0}\nfailed: ${progress.failed ?? 0}${payload.error ? `\nerror: ${payload.error}` : ""}`
+    );
+
+    if (["completed", "failed"].includes(payload.status)) {
+      keepPolling = false;
+      await loadData();
+    }
+  }
+}
+
+async function runSelection() {
+  if (!state.backendAvailable) {
+    updateJobStatus("Backend unavailable. Running new experiments requires server mode.");
+    return;
+  }
+
+  const dataset = els.datasetSelect.value;
+  const model = els.modelSelect.value;
+  const selectedMethods = getSelectedMethods();
+  const methods = selectedMethods.length ? selectedMethods : [...els.methodSelect.options].map((o) => o.value);
+  const metrics = collectRunMetrics();
+
+  if (!dataset || !model) {
+    updateJobStatus("Select dataset and model before running experiments.");
+    return;
+  }
+  if (!methods.length) {
+    updateJobStatus("No methods selected or available.");
+    return;
+  }
+
+  try {
+    const payload = await postJson("/api/run-selection", {
+      dataset,
+      model,
+      methods,
+      metrics,
+    });
+    updateJobStatus(`Job ${payload.job_id} submitted.`);
+    pollJob(payload.job_id);
+  } catch (err) {
+    updateJobStatus(`Run failed to submit: ${err.message}`);
+  }
+}
+
+async function runUploadedConfig() {
+  if (!state.backendAvailable) {
+    updateJobStatus("Backend unavailable. Running uploaded config requires server mode.");
+    return;
+  }
+  if (!state.uploadedYamlText) {
+    updateJobStatus("Upload a YAML config first.");
+    return;
+  }
+
+  const metrics = collectRunMetrics();
+  const methods = getSelectedMethods();
+
+  try {
+    const payload = await postJson("/api/run-config", {
+      yaml_text: state.uploadedYamlText,
+      metrics,
+      methods,
+    });
+    updateJobStatus(`Job ${payload.job_id} submitted from uploaded config.`);
+    pollJob(payload.job_id);
+  } catch (err) {
+    updateJobStatus(`Config run submission failed: ${err.message}`);
+  }
+}
 function onConfigUpload(event) {
   const file = event.target.files?.[0];
   if (!file) return;
@@ -332,6 +471,7 @@ function onConfigUpload(event) {
   reader.onload = () => {
     try {
       const raw = String(reader.result || "");
+      state.uploadedYamlText = raw;
       const parsed = window.jsyaml.load(raw);
       if (!parsed || typeof parsed !== "object") {
         throw new Error("Parsed YAML is empty or invalid.");
@@ -341,6 +481,7 @@ function onConfigUpload(event) {
       rankMethods();
     } catch (err) {
       els.configStatus.textContent = `Config parse error: ${err.message}`;
+      state.uploadedYamlText = null;
     }
   };
   reader.readAsText(file);
@@ -353,16 +494,45 @@ function resetFilters() {
     o.selected = false;
   });
   buildMetricEditor();
+  buildRunMetricEditor();
   els.configUpload.value = "";
   els.configStatus.textContent = "No config uploaded.";
+  state.uploadedYamlText = null;
   rankMethods();
+}
+
+function parseLocalCsv() {
+  return new Promise((resolve, reject) => {
+    Papa.parse(LOCAL_DATA_PATH, {
+      download: true,
+      header: true,
+      skipEmptyLines: true,
+      complete: (result) => {
+        if (result.errors.length) {
+          reject(new Error(result.errors[0].message));
+        } else {
+          resolve(result.data);
+        }
+      },
+      error: reject,
+    });
+  });
+}
+
+async function fetchBackendData() {
+  const response = await fetch("/api/results");
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  const payload = await response.json();
+  const optionsResp = await fetch("/api/options");
+  const options = optionsResp.ok ? await optionsResp.json() : null;
+  return { rows: payload.rows || [], options };
 }
 
 function initFromRows(rows) {
   state.rows = rows;
-  const datasets = uniqueSorted(rows.map((r) => r.dataset));
-  const models = uniqueSorted(rows.map((r) => r.model));
-  const methods = uniqueSorted(rows.map((r) => r.method));
+  const datasets = state.options.datasets.length ? state.options.datasets : uniqueSorted(rows.map((r) => r.dataset));
+  const models = state.options.models.length ? state.options.models : uniqueSorted(rows.map((r) => r.model));
+  const methods = state.options.methods.length ? state.options.methods : uniqueSorted(rows.map((r) => r.method));
 
   const excluded = new Set([
     "config_file",
@@ -380,8 +550,8 @@ function initFromRows(rows) {
     .filter((key) => !excluded.has(key))
     .filter((key) => rows.some((r) => Number.isFinite(parseNumber(r[key]))));
 
-  state.metricNames = metricNames;
-  metricNames.forEach((m) => {
+  state.metricNames = uniqueSorted(metricNames);
+  state.metricNames.forEach((m) => {
     state.directions[m] = inferDirection(m);
   });
 
@@ -390,29 +560,41 @@ function initFromRows(rows) {
   setSelectOptions(els.methodSelect, methods, false);
 
   buildMetricEditor();
+  buildRunMetricEditor();
   rankMethods();
 }
 
-function loadData() {
-  Papa.parse(DATA_PATH, {
-    download: true,
-    header: true,
-    skipEmptyLines: true,
-    complete: (result) => {
-      if (result.errors.length) {
-        els.summary.textContent = `CSV load error: ${result.errors[0].message}`;
-        return;
-      }
-      initFromRows(result.data);
-    },
-    error: (err) => {
-      els.summary.textContent = `CSV load error: ${err.message}`;
-    },
-  });
+async function loadData() {
+  try {
+    const backend = await fetchBackendData();
+    state.backendAvailable = true;
+    state.options = {
+      datasets: backend.options?.datasets || [],
+      models: backend.options?.models || [],
+      methods: backend.options?.methods || [],
+    };
+    els.modeHint.textContent = "Server mode: enabled. You can run new experiments from this page.";
+    initFromRows(backend.rows);
+    return;
+  } catch (_err) {
+    state.backendAvailable = false;
+    state.options = { datasets: [], models: [], methods: [] };
+  }
+
+  try {
+    const rows = await parseLocalCsv();
+    els.modeHint.textContent = "Static mode: running new experiments is disabled (no backend detected).";
+    initFromRows(rows);
+  } catch (err) {
+    els.summary.textContent = `Failed to load data: ${err.message}`;
+  }
 }
 
 els.rankBtn.addEventListener("click", rankMethods);
 els.resetBtn.addEventListener("click", resetFilters);
+els.reloadBtn.addEventListener("click", loadData);
+els.runSelectionBtn.addEventListener("click", runSelection);
+els.runConfigBtn.addEventListener("click", runUploadedConfig);
 els.configUpload.addEventListener("change", onConfigUpload);
 
 loadData();

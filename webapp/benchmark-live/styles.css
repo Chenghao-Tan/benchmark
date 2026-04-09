@@ -253,3 +253,13 @@ th {
     grid-template-columns: 1fr 1fr;
   }
 }
+.jobStatus {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px dashed var(--line);
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.85rem;
+  white-space: pre-wrap;
+}

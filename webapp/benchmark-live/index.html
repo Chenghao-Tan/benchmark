@@ -17,11 +17,9 @@
       <p class="eyebrow">Recourse Benchmark</p>
       <h1>Method Selector Dashboard</h1>
       <p class="subtitle">
-        Choose dataset, model, metrics, and constraints to rank the best methods from available benchmark results.
+        Choose dataset, model, metrics, and constraints to rank methods from available and newly-run experiments.
       </p>
-      <p class="hint">
-        GitHub Pages support: yes (static dashboard). Running brand-new experiments from the site requires backend compute.
-      </p>
+      <p id="modeHint" class="hint"></p>
     </header>
 
     <section class="panel controls">
@@ -42,19 +40,32 @@
         <select id="methodSelect" multiple size="6"></select>
       </label>
 
+      <h2>Run New Experiments</h2>
+      <p class="small">When backend is available, this runs missing settings and appends fresh results.</p>
+
+      <div id="runMetricEditor" class="metricEditor"></div>
+
+      <div class="actions">
+        <button id="runSelectionBtn" type="button">Run Selection</button>
+      </div>
+
       <div class="uploadRow">
         <label for="configUpload" class="uploadLabel">Upload YAML Config</label>
         <input id="configUpload" type="file" accept=".yaml,.yml" />
+        <button id="runConfigBtn" type="button" class="ghost">Run Uploaded Config</button>
         <span id="configStatus" class="configStatus">No config uploaded.</span>
       </div>
 
-      <h2>Metrics & Constraints</h2>
+      <div id="jobStatus" class="jobStatus"></div>
+
+      <h2>Ranking Metrics & Constraints</h2>
       <p class="small">Use checkbox to include metric in ranking. Add optional min/max constraints.</p>
       <div id="metricEditor" class="metricEditor"></div>
 
       <div class="actions">
         <button id="rankBtn" type="button">Rank Methods</button>
         <button id="resetBtn" type="button" class="ghost">Reset Filters</button>
+        <button id="reloadBtn" type="button" class="ghost">Reload Results</button>
       </div>
     </section>
 

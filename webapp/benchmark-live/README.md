@@ -1,35 +1,35 @@
 # Benchmark Live Site
 
-Static dashboard for method ranking from benchmark outputs.
+This app has two modes:
 
-## Features
-- Choose `dataset`, `model`, and optional subset of `methods`.
-- Select ranking metrics with weights and optimization direction.
-- Add per-metric min/max constraints.
-- Upload a YAML experiment config to auto-apply dataset/model/evaluation metric choices.
-- View top methods and full ranking table.
+1. Static mode (GitHub Pages): rank/filter existing CSV results.
+2. Server mode (Python backend): run new experiments from UI and append fresh results.
 
-## Data Source
-The dashboard reads:
+## Files
+- `index.html`, `styles.css`, `app.js`: frontend
+- `server.py`: backend API + static file server
+- `data/benchmark_results.csv`: baseline results
+- `data/runtime_results.csv`: generated in server mode
 
-- `data/benchmark_results.csv`
-
-Current file is generated from the 2x2x5 benchmark batch.
-
-## Run Locally
-Use any static server from repo root, for example:
+## Server Mode (Recommended)
+From repo root:
 
 ```powershell
-python -m http.server 8080
+venv12\Scripts\python.exe webapp\benchmark-live\server.py --port 8000
 ```
 
-Then open:
+Open:
 
-- `http://localhost:8080/webapp/benchmark-live/`
+- `http://127.0.0.1:8000/`
 
-## GitHub Pages
-Yes, this can be hosted on GitHub Pages because it is static HTML/CSS/JS.
+API endpoints used by UI:
+- `GET /api/options`
+- `GET /api/results`
+- `POST /api/run-selection`
+- `POST /api/run-config`
+- `GET /api/jobs/<job_id>`
 
-Limitations on GitHub Pages:
-- It can rank and filter existing benchmark results.
-- It cannot execute new Python experiments server-side.
+## Static Mode (GitHub Pages)
+GitHub Pages can host the dashboard UI, but it cannot execute Python experiments.
+
+In static mode the page falls back to `data/benchmark_results.csv` only.
