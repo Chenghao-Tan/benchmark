@@ -9,6 +9,7 @@ from method.face.face import FaceMethod
 from method.feature_tweak.feature_tweak import FeatureTweakMethod
 from method.gravitational.gravitational import GravitationalMethod
 from method.gs.gs import GsMethod
+from method.hare.hare import HareMethod
 from method.larr.larr import LarrMethod
 from method.mace.mace import MaceMethod
 from method.method_object import MethodObject

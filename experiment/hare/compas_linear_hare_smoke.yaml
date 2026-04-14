@@ -1,0 +1,47 @@
+name: compas_linear_hare_smoke
+logger:
+  level: INFO
+  path: ./logs/compas_linear_hare_smoke.log
+caching:
+  path: ./cache/
+dataset:
+  name: compas
+preprocess:
+  - name: scale
+    seed: 1
+    scaling: normalize
+    range: true
+  - name: encode
+    seed: 1
+    encoding: onehot
+  - name: split
+    seed: 1
+    split: 0.2
+    sample: 8
+model:
+  name: linear
+  seed: 1
+  epochs: 20
+  learning_rate: 0.03
+  batch_size: 16
+  optimizer: adam
+  criterion: cross_entropy
+  output_activation: softmax
+method:
+  name: hare
+  seed: 1
+  base_method: wachter
+  budget: 4
+  iterations: 1
+  sampling_epochs: 25
+  sampling_lambda: 10.0
+  sampling_lr: 0.1
+  sampling_radius: 1.0
+  baseline_lr: 0.01
+  baseline_lambda: 0.1
+  baseline_n_iter: 300
+  baseline_t_max_min: 0.1
+  ground_truth_scale: far
+evaluation:
+  - name: validity
+  - name: distance

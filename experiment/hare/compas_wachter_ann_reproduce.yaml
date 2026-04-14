@@ -1,0 +1,59 @@
+name: compas_wachter_ann_reproduce
+logger:
+  level: INFO
+  path: ./logs/compas_wachter_ann_reproduce.log
+caching:
+  path: ./cache/
+dataset:
+  name: compas_carla
+preprocess:
+  - name: scale
+    seed: 1
+    scaling: normalize
+    range: true
+  - name: encode
+    seed: 1
+    encoding: onehot
+  - name: split
+    seed: 1
+    split: 0.25
+model:
+  name: mlp
+  seed: 1
+  epochs: 20
+  learning_rate: 0.002
+  batch_size: 256
+  layers:
+    - 10
+    - 5
+    - 10
+  optimizer: rms
+  criterion: bce
+  output_activation: softmax
+method:
+  name: hare
+  seed: 1
+  desired_class: 1
+  base_method: wachter
+  budget: 30
+  iterations: 1
+  sampling_epochs: 100
+  sampling_lambda: 10.0
+  sampling_lr: 0.1
+  sampling_radius: 1.0
+  boundary_epsilon: 1.0e-6
+  calibrate_all_candidates: true
+  ground_truth_scale: far
+  use_preferences: false
+  noise_prob: 0.0
+  baseline_lr: 0.01
+  baseline_lambda: 0.1
+  baseline_n_iter: 2500
+  baseline_t_max_min: 0.7
+  baseline_norm: 1
+  baseline_loss_type: BCE
+  gt_n_search_samples: 300
+  gt_step: 0.2
+  gt_max_iter: 1000
+  gt_max_attempts: 64
+evaluation: []

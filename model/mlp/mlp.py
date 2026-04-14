@@ -65,10 +65,6 @@ class MlpModel(ModelObject):
             raise ValueError(
                 "MlpModel output_activation='sigmoid' requires criterion='bce'"
             )
-        if self._output_activation_name == "softmax" and self._criterion_name == "bce":
-            raise ValueError(
-                "MlpModel output_activation='softmax' is incompatible with criterion='bce'"
-            )
 
     def _build_model(self, input_dim: int, output_dim: int) -> torch.nn.Module:
         blocks: list[torch.nn.Module] = []
@@ -123,7 +119,17 @@ class MlpModel(ModelObject):
                 y_tensor = labels.to(self._device)
             else:
                 criterion = torch.nn.BCELoss()
-                y_tensor = labels.to(self._device).to(dtype=torch.float32).unsqueeze(1)
+                if self._output_activation_name == "sigmoid":
+                    y_tensor = (
+                        labels.to(self._device)
+                        .to(dtype=torch.float32)
+                        .unsqueeze(1)
+                    )
+                else:
+                    y_tensor = torch.nn.functional.one_hot(
+                        labels.to(self._device),
+                        num_classes=network_output_dim,
+                    ).to(dtype=torch.float32)
 
             self._model.train()
             for _ in tqdm(range(self._epochs), desc="mlp-fit", leave=False):
@@ -134,11 +140,13 @@ class MlpModel(ModelObject):
                     batch_y = y_tensor[batch_indices]
                     optimizer.zero_grad()
                     logits = self._model(batch_X)
-                    loss_input = (
-                        torch.sigmoid(logits)
-                        if self._criterion_name == "bce"
-                        else logits
-                    )
+                    if self._criterion_name == "bce":
+                        if self._output_activation_name == "sigmoid":
+                            loss_input = torch.sigmoid(logits)
+                        else:
+                            loss_input = torch.softmax(logits, dim=1)
+                    else:
+                        loss_input = logits
                     loss = criterion(loss_input, batch_y)
                     loss.backward()
                     optimizer.step()
