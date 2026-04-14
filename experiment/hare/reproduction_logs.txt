@@ -1,0 +1,9 @@
+- Base Wachter is still off: Base is too far from paper on both GTP and GTD, so the underlying initial counterfactual landscape is still wrong before HARE even starts.                 
+- GT user target is still misaligned: even after clipping fixes, the simulated-user ground-truth counterfactuals likely do not match the reference distribution closely enough, which   
+directly distorts both GTP and GTD.                                                                                                                                                   
+- ANN decision boundary mismatch: the reproduction ANN is CARLA-like, but still a local reimplementation. Small training/prediction differences can change which factuals are negative  
+and how far Wachter/GS must move.                                                                                                                                                     
+- Success-rate instability across seeds: seeds 2 and 5 still have much lower valid counts than the others. That suggests non-convergence or filtering mismatch in the base/GT path, not 
+just harmless noise.                                                                                                                                                                  
+- HARE inherits the wrong base landscape: HARE and Multi-HARE improve over Base, but both remain far from paper because they are starting from a base CF and GT target that are already 
+mispositioned.
