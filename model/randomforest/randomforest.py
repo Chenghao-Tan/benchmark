@@ -6,6 +6,7 @@ from sklearn.ensemble import RandomForestClassifier
 
 from dataset.dataset_object import DatasetObject
 from model.model_object import ModelObject, process_nan
+from model.model_utils import resolve_device
 from utils.registry import register
 from utils.seed import seed_context
 
@@ -19,18 +20,25 @@ class RandomForestModel(ModelObject):
         n_estimators: int = 200,
         max_depth: int | None = None,
         min_samples_split: int = 2,
+        n_jobs: int | None = None,
+        max_features: str | int | float | None = "sqrt",
         **kwargs,
     ):
         self._model: RandomForestClassifier = RandomForestClassifier(
             n_estimators=n_estimators,
             max_depth=max_depth,
             min_samples_split=min_samples_split,
+            max_features=max_features,
             random_state=seed,
+            n_jobs=n_jobs,
         )
         self._seed = seed
-        self._device = device.lower()
+        self._device = resolve_device(device)
         self._need_grad = False
         self._is_trained = False
+
+        if self._device != "cpu":
+            raise ValueError("RandomForestModel only supports cpu")
 
     def fit(self, trainset: DatasetObject | None):
         if trainset is None:
@@ -45,14 +53,19 @@ class RandomForestModel(ModelObject):
         if not self._is_trained:
             raise RuntimeError("Target model is not trained")
         with seed_context(self._seed):
-            probabilities = torch.tensor(
-                self._model.predict_proba(X), dtype=torch.float32
-            )
             if proba:
+                probabilities = torch.tensor(
+                    self._model.predict_proba(X), dtype=torch.float32
+                )
                 return probabilities
-            indices = probabilities.argmax(dim=1)
+
+            predicted_labels = torch.tensor(
+                self._model.predict(X),
+                dtype=torch.long,
+            )
             return torch.nn.functional.one_hot(
-                indices, num_classes=probabilities.shape[1]
+                predicted_labels,
+                num_classes=len(self._model.classes_),
             ).to(dtype=torch.float32)
 
     def forward(self, X: torch.Tensor) -> torch.Tensor:

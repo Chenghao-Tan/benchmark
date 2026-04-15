@@ -28,14 +28,20 @@ class MlpModel(ModelObject):
         device: str = "cpu",
         epochs: int = 160,
         learning_rate: float = 0.01,
-        batch_size: int = 16,
+        batch_size: int | None = 16,
         layers: list[int] | None = None,
         sampling: str = "uniform",
+        l2_lambda: float = 0.0,
         optimizer: str = "adam",
         criterion: str = "cross_entropy",
         output_activation: str = "softmax",
         pretrained_path: str | None = None,
         save_name: str | None = None,
+        weight_decay: float = 0.0,
+        loss_reduction: str = "mean",
+        xavier_uniform_init: bool = False,
+        early_stop_tol: float | None = None,
+        early_stop_patience: int | None = None,
         **kwargs,
     ):
         self._model: torch.nn.Module
@@ -45,20 +51,42 @@ class MlpModel(ModelObject):
         self._is_trained = False
         self._epochs: int = int(epochs)
         self._learning_rate: float = float(learning_rate)
-        self._batch_size: int = int(batch_size)
+        self._batch_size: int | None = (
+            None if batch_size is None else int(batch_size)
+        )
         self._layers: list[int] = list(layers or [32, 16])
         self._sampling: str = str(sampling).lower()
+        self._l2_lambda: float = float(l2_lambda)
         self._optimizer_name: str = optimizer
         self._criterion_name: str = criterion.lower()
         self._output_activation_name: str = output_activation.lower()
         self._pretrained_path: str | None = pretrained_path
         self._save_name: str | None = save_name
+        self._weight_decay: float = float(weight_decay)
+        self._loss_reduction: str = str(loss_reduction).lower()
+        self._xavier_uniform_init: bool = bool(xavier_uniform_init)
+        self._early_stop_tol: float | None = (
+            None if early_stop_tol is None else float(early_stop_tol)
+        )
+        self._early_stop_patience: int | None = (
+            None if early_stop_patience is None else int(early_stop_patience)
+        )
         self._output_dim: int | None = None
 
-        if self._batch_size < 1:
+        if self._batch_size is not None and self._batch_size < 1:
             raise ValueError("batch_size must be >= 1")
         if self._sampling not in {"uniform", "weighted"}:
             raise ValueError("sampling must be either 'uniform' or 'weighted'")
+        if self._l2_lambda < 0.0:
+            raise ValueError("l2_lambda must be >= 0")
+        if self._weight_decay < 0:
+            raise ValueError("weight_decay must be >= 0")
+        if self._loss_reduction not in {"mean", "sum"}:
+            raise ValueError("loss_reduction must be 'mean' or 'sum'")
+        if self._early_stop_patience is not None and self._early_stop_patience < 1:
+            raise ValueError("early_stop_patience must be >= 1")
+        if self._early_stop_tol is not None and self._early_stop_tol < 0:
+            raise ValueError("early_stop_tol must be >= 0")
         if self._criterion_name not in {"cross_entropy", "bce"}:
             raise ValueError(
                 "MlpModel supports criterion='cross_entropy' or criterion='bce' only"
@@ -84,7 +112,12 @@ class MlpModel(ModelObject):
             blocks.append(torch.nn.ReLU())
             current_dim = hidden_dim
         blocks.append(torch.nn.Linear(current_dim, output_dim))
-        return torch.nn.Sequential(*blocks)
+        model = torch.nn.Sequential(*blocks)
+        if self._xavier_uniform_init:
+            for parameter in model.parameters():
+                if parameter.ndim > 1:
+                    torch.nn.init.xavier_uniform_(parameter)
+        return model
 
     def fit(self, trainset: DatasetObject | None):
         if trainset is None:
@@ -119,16 +152,21 @@ class MlpModel(ModelObject):
                 return
 
             optimizer = build_optimizer(
-                self._optimizer_name, self._model.parameters(), self._learning_rate
+                self._optimizer_name,
+                self._model.parameters(),
+                self._learning_rate,
+                weight_decay=self._weight_decay,
             )
             X_tensor = torch.tensor(
                 X.to_numpy(dtype="float32"), dtype=torch.float32, device=self._device
             )
             if self._criterion_name == "cross_entropy":
-                criterion = torch.nn.CrossEntropyLoss()
+                criterion = torch.nn.CrossEntropyLoss(
+                    reduction=self._loss_reduction
+                )
                 y_tensor = labels.to(self._device)
             else:
-                criterion = torch.nn.BCELoss()
+                criterion = torch.nn.BCELoss(reduction=self._loss_reduction)
                 y_tensor = labels.to(self._device).to(dtype=torch.float32).unsqueeze(1)
 
             sampler = None
@@ -147,24 +185,34 @@ class MlpModel(ModelObject):
                     replacement=True,
                 )
 
+            effective_batch_size = (
+                X_tensor.shape[0]
+                if self._batch_size is None
+                else self._batch_size
+            )
+            previous_loss = float("inf")
+            stable_iterations = 0
+
             self._model.train()
             for _ in tqdm(range(self._epochs), desc="mlp-fit", leave=False):
+                # Merged Batch Iterator Logic
                 if sampler is None:
                     permutation = torch.randperm(X_tensor.shape[0], device=self._device)
                     batch_index_iterator = (
-                        permutation[start : start + self._batch_size]
-                        for start in range(0, X_tensor.shape[0], self._batch_size)
+                        permutation[start : start + effective_batch_size]
+                        for start in range(0, X_tensor.shape[0], effective_batch_size)
                     )
                 else:
                     sampled_indices = list(iter(sampler))
                     batch_index_iterator = (
                         torch.tensor(
-                            sampled_indices[start : start + self._batch_size],
+                            sampled_indices[start : start + effective_batch_size],
                             dtype=torch.long,
                             device=self._device,
                         )
-                        for start in range(0, len(sampled_indices), self._batch_size)
+                        for start in range(0, len(sampled_indices), effective_batch_size)
                     )
+
                 for batch_indices in batch_index_iterator:
                     batch_X = X_tensor[batch_indices]
                     batch_y = y_tensor[batch_indices]
@@ -176,8 +224,28 @@ class MlpModel(ModelObject):
                         else logits
                     )
                     loss = criterion(loss_input, batch_y)
+                    
+                    # From Snippet 2
+                    if self._l2_lambda > 0.0:
+                        l2_norm = sum(
+                            parameter.pow(2.0).sum()
+                            for parameter in self._model.parameters()
+                        )
+                        loss = loss + self._l2_lambda * l2_norm
+                        
                     loss.backward()
                     optimizer.step()
+
+                loss_value = float(loss.detach().cpu().item())
+                if self._early_stop_tol is None or self._early_stop_patience is None:
+                    continue
+                if previous_loss - loss_value <= self._early_stop_tol:
+                    stable_iterations += 1
+                    if stable_iterations >= self._early_stop_patience:
+                        break
+                else:
+                    stable_iterations = 0
+                previous_loss = loss_value
 
             self._model.eval()
             self._is_trained = True
