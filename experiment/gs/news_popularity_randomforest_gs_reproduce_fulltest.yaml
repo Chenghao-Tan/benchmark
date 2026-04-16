@@ -1,7 +1,7 @@
-name: news_popularity_randomforest_gs_reproduce
+name: news_popularity_randomforest_gs_reproduce_fulltest
 logger:
   level: INFO
-  path: ./logs/news_popularity_randomforest_gs_reproduce.log
+  path: ./logs/news_popularity_randomforest_gs_fulltest.log
 caching:
   path: ./cache/
 dataset:

@@ -1,7 +1,7 @@
-name: news_popularity_randomforest_gs_reproduce
+name: news_popularity_randomforest_gs_reproduce_smoke
 logger:
   level: INFO
-  path: ./logs/news_popularity_randomforest_gs_reproduce.log
+  path: ./logs/news_popularity_randomforest_gs_smoke.log
 caching:
   path: ./cache/
 dataset:
@@ -14,6 +14,7 @@ preprocess:
   - name: split
     seed: 42
     split: 11893
+    sample: 4
 model:
   name: randomforest
   seed: 42
@@ -27,9 +28,9 @@ method:
   seed: 42
   device: cpu
   eta: 0.001
-  n_search_samples: 10000
+  n_search_samples: 500
   p_norm: 2
-  max_iter: 1000
+  max_iter: 200
 evaluation:
   - name: validity
   - name: distance

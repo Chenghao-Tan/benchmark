@@ -10,7 +10,12 @@ preprocess:
   - name: split
     seed: 619
     split: 0.2
-  - name: finalize
+  - name: cchvae_limit_train_local
+    path: ./cache/cchvae/train_limit.txt
+  - name: cchvae_select_test_local
+    path: ./cache/cchvae/selected_test_indices.json
+  - name: cchvae_attach_reference_local
+    path: ./cache/cchvae/positive_reference.csv
 model:
   name: sklearn_logistic_regression
   seed: 619
@@ -38,3 +43,17 @@ method:
   degree_active: 1.0
 evaluation:
   - name: validity
+  - name: cchvae_outlier_rate_local
+    neighbors:
+      - 5
+      - 10
+      - 20
+      - 50
+  - name: cchvae_connectedness_local
+    epsilons:
+      - 10
+      - 20
+      - 30
+      - 40
+      - 50
+    min_samples: 5

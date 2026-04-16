@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
-from copy import deepcopy
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -12,27 +12,33 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import numpy as np
 import pandas as pd
-import torch
 import yaml
 from sklearn.cluster import DBSCAN
 from sklearn.neighbors import LocalOutlierFactor
 
-import dataset  # noqa: F401
-import method  # noqa: F401
-import model  # noqa: F401
-import preprocess  # noqa: F401
+from evaluation.evaluation_object import EvaluationObject
 from evaluation.evaluation_utils import resolve_evaluation_inputs
-from evaluation.validity import ValidityEvaluation
-from preprocess.common import FinalizePreProcess
-from utils.caching import set_cache_dir
-from utils.logger import setup_logger
-from utils.registry import get_registry
+from experiment import Experiment
+from preprocess.preprocess_object import PreProcessObject
+from utils.registry import register
 
-DEFAULT_CONFIG_PATH = Path(__file__).with_name(
+PREPARE_CONFIG_PATH = Path(__file__).with_name(
+    "credit_cchvae_sklearn_logistic_regression_cchvae_prepare.yaml"
+)
+RUN_CONFIG_PATH = Path(__file__).with_name(
     "credit_cchvae_sklearn_logistic_regression_cchvae_reproduce.yaml"
 )
-TRAIN_SAMPLE_LIMIT: int | None = None
-NCOUNTERFACTUALS: int | None = None
+ARTIFACT_DIR = PROJECT_ROOT / "cache" / "cchvae"
+TRAIN_LIMIT_PATH = ARTIFACT_DIR / "train_limit.txt"
+TEST_INDEX_PATH = ARTIFACT_DIR / "selected_test_indices.json"
+REFERENCE_PATH = ARTIFACT_DIR / "positive_reference.csv"
+LOCAL_OUTLIER_EVALUATION_NAME = "cchvae_outlier_rate_local"
+LOCAL_CONNECTEDNESS_EVALUATION_NAME = "cchvae_connectedness_local"
+LOCAL_LIMIT_TRAIN_PREPROCESS_NAME = "cchvae_limit_train_local"
+LOCAL_SELECT_TEST_PREPROCESS_NAME = "cchvae_select_test_local"
+LOCAL_ATTACH_REFERENCE_PREPROCESS_NAME = "cchvae_attach_reference_local"
+DEFAULT_TRAIN_SAMPLE_LIMIT: int | None = None
+DEFAULT_NCOUNTERFACTUALS: int | None = None
 LOF_NEIGHBORS = [5, 10, 20, 50]
 CONNECTEDNESS_EPSILONS = [10, 20, 30, 40, 50]
 DBSCAN_MIN_SAMPLES = 5
@@ -41,309 +47,289 @@ CONNECTEDNESS_EPS = 30
 CONNECTEDNESS_LIMIT = 0.5
 
 
-def _load_config(config_path: Path) -> dict:
-    with config_path.open("r", encoding="utf-8") as file:
-        config = yaml.safe_load(file)
-    if not isinstance(config, dict):
-        raise ValueError("Reproduction config must parse to a dictionary")
-    return config
+@register(LOCAL_LIMIT_TRAIN_PREPROCESS_NAME)
+class CchvaeLimitTrainPreProcess(PreProcessObject):
+    def __init__(self, path: str, seed: int | None = None, **kwargs):
+        del kwargs
+        self._path = Path(path)
+        self._seed = seed
+
+    def transform(self, input):
+        del self._seed
+        if not getattr(input, "trainset", False) or not self._path.exists():
+            return input
+        limit = int(self._path.read_text(encoding="utf-8").strip())
+        if limit >= len(input.snapshot()):
+            return input
+        input.update(
+            "limited_trainset",
+            limit,
+            df=input.snapshot().iloc[:limit].copy(deep=True),
+        )
+        return input
 
 
-def _resolve_device() -> str:
-    return "cuda" if torch.cuda.is_available() else "cpu"
+@register(LOCAL_SELECT_TEST_PREPROCESS_NAME)
+class CchvaeSelectTestPreProcess(PreProcessObject):
+    def __init__(self, path: str, seed: int | None = None, **kwargs):
+        del kwargs
+        self._path = Path(path)
+        self._seed = seed
+
+    def transform(self, input):
+        del self._seed
+        if not getattr(input, "testset", False) or not self._path.exists():
+            return input
+        indices = json.loads(self._path.read_text(encoding="utf-8"))
+        input.update(
+            "selected_test_indices",
+            indices,
+            df=input.snapshot().loc[indices].copy(deep=True),
+        )
+        return input
 
 
-def _build_dataset(config: dict):
-    cfg = deepcopy(config["dataset"])
-    name = cfg.pop("name")
-    return get_registry("dataset")[name](**cfg)
+@register(LOCAL_ATTACH_REFERENCE_PREPROCESS_NAME)
+class CchvaeAttachReferencePreProcess(PreProcessObject):
+    def __init__(self, path: str, attr_name: str = "cchvae_positive_reference", seed: int | None = None, **kwargs):
+        del kwargs
+        self._path = Path(path)
+        self._attr_name = attr_name
+        self._seed = seed
+
+    def transform(self, input):
+        del self._seed
+        if not getattr(input, "testset", False) or not self._path.exists():
+            return input
+        input.update(self._attr_name, pd.read_csv(self._path))
+        return input
 
 
-def _build_preprocess(config: dict) -> list:
-    preprocess = []
-    registry = get_registry("preprocess")
-    for item in config.get("preprocess", []):
-        step_cfg = deepcopy(item)
-        name = step_cfg.pop("name")
-        preprocess.append(registry[name](**step_cfg))
-    if not preprocess or not isinstance(preprocess[-1], FinalizePreProcess):
-        preprocess.append(FinalizePreProcess())
-    return preprocess
+@register(LOCAL_OUTLIER_EVALUATION_NAME)
+class CchvaeOutlierRateEvaluation(EvaluationObject):
+    def __init__(self, neighbors: list[int] | None = None, **kwargs):
+        del kwargs
+        self._neighbors = list(neighbors or LOF_NEIGHBORS)
+
+    def evaluate(self, factuals, counterfactuals) -> pd.DataFrame:
+        reference = factuals.attr("cchvae_positive_reference")
+        _, counterfactual_features, evaluation_mask, success_mask = resolve_evaluation_inputs(
+            factuals, counterfactuals
+        )
+        selected_mask = evaluation_mask & success_mask
+        selected_counterfactuals = counterfactual_features.loc[selected_mask.to_numpy()]
+        if selected_counterfactuals.empty:
+            return pd.DataFrame(
+                [{f"outlier_rate_k_{neighbor}": float("nan") for neighbor in self._neighbors}]
+            )
+        results = {}
+        for neighbor in self._neighbors:
+            model = LocalOutlierFactor(
+                n_neighbors=neighbor,
+                contamination=0.01,
+                novelty=True,
+            )
+            model.fit(reference.to_numpy(dtype="float32"))
+            prediction = model.predict(selected_counterfactuals.to_numpy(dtype="float32"))
+            results[f"outlier_rate_k_{neighbor}"] = float(np.mean(prediction == -1))
+        return pd.DataFrame([results])
 
 
-def _build_model(config: dict):
-    cfg = deepcopy(config["model"])
-    name = cfg.pop("name")
-    return get_registry("model")[name](**cfg)
+@register(LOCAL_CONNECTEDNESS_EVALUATION_NAME)
+class CchvaeConnectednessEvaluation(EvaluationObject):
+    def __init__(
+        self,
+        epsilons: list[int | float] | None = None,
+        min_samples: int = DBSCAN_MIN_SAMPLES,
+        **kwargs,
+    ):
+        del kwargs
+        self._epsilons = list(epsilons or CONNECTEDNESS_EPSILONS)
+        self._min_samples = int(min_samples)
+
+    def evaluate(self, factuals, counterfactuals) -> pd.DataFrame:
+        reference = factuals.attr("cchvae_positive_reference")
+        _, counterfactual_features, evaluation_mask, success_mask = resolve_evaluation_inputs(
+            factuals, counterfactuals
+        )
+        selected_mask = evaluation_mask & success_mask
+        selected_counterfactuals = counterfactual_features.loc[selected_mask.to_numpy()]
+        if selected_counterfactuals.empty:
+            return pd.DataFrame(
+                [
+                    {
+                        f"not_connected_rate_eps_{epsilon}": float("nan")
+                        for epsilon in self._epsilons
+                    }
+                ]
+            )
+        reference_array = reference.to_numpy(dtype="float32")
+        counter_array = selected_counterfactuals.to_numpy(dtype="float32")
+        results = {}
+        for epsilon in self._epsilons:
+            not_connected = []
+            for row in counter_array:
+                density_control = np.r_[reference_array, row.reshape(1, -1)]
+                labels = (
+                    DBSCAN(eps=float(epsilon), min_samples=self._min_samples)
+                    .fit(density_control)
+                    .labels_
+                )
+                not_connected.append(labels[-1] == -1)
+            results[f"not_connected_rate_eps_{epsilon}"] = float(np.mean(not_connected))
+        return pd.DataFrame([results])
 
 
-def _build_method(config: dict, target_model):
-    cfg = deepcopy(config["method"])
-    name = cfg.pop("name")
-    return get_registry("method")[name](target_model=target_model, **cfg)
+def run_reproduction(
+    prepare_config_path: Path = PREPARE_CONFIG_PATH,
+    run_config_path: Path = RUN_CONFIG_PATH,
+    train_sample_limit: int | None = DEFAULT_TRAIN_SAMPLE_LIMIT,
+    ncounterfactuals: int | None = DEFAULT_NCOUNTERFACTUALS,
+) -> pd.DataFrame:
+    ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
+    with prepare_config_path.open("r", encoding="utf-8") as file:
+        prepare_config = yaml.safe_load(file)
+    if not isinstance(prepare_config, dict):
+        raise ValueError("Preparation config must parse to a dictionary")
 
-def _resolve_train_test(datasets: list):
-    trainsets = [dataset for dataset in datasets if getattr(dataset, "trainset", False)]
-    testsets = [dataset for dataset in datasets if getattr(dataset, "testset", False)]
-    if len(trainsets) != 1 or len(testsets) != 1:
-        raise ValueError("Expected exactly one trainset and one testset")
-    return trainsets[0], testsets[0]
+    with run_config_path.open("r", encoding="utf-8") as file:
+        run_config = yaml.safe_load(file)
+    if not isinstance(run_config, dict):
+        raise ValueError("Run config must parse to a dictionary")
 
+    preparation_experiment = Experiment(prepare_config)
+    logger = preparation_experiment._logger
+    logger.info("Loaded preparation config from %s", prepare_config_path)
+    logger.info("Loaded run config from %s", run_config_path)
 
-def _materialize_datasets(dataset, preprocess_steps: list):
-    datasets = [dataset]
-    for preprocess_step in preprocess_steps:
+    preparation_datasets = [preparation_experiment._raw_dataset]
+    for preprocess_step in preparation_experiment._preprocess:
         next_datasets = []
-        for current_dataset in datasets:
+        for current_dataset in preparation_datasets:
             transformed = preprocess_step.transform(current_dataset)
             if isinstance(transformed, tuple):
                 next_datasets.extend(list(transformed))
             else:
                 next_datasets.append(transformed)
-        datasets = next_datasets
-    return _resolve_train_test(datasets)
+        preparation_datasets = next_datasets
+    trainset, testset = preparation_experiment._resolve_train_test(preparation_datasets)
+    logger.info("Train/test sizes: %d / %d", len(trainset), len(testset))
 
-
-def _target_indices(dataset, class_to_index: dict[int | str, int]) -> np.ndarray:
-    target = dataset.get(target=True).iloc[:, 0]
-    output = []
-    for value in target.tolist():
-        if isinstance(value, float) and float(value).is_integer():
-            value = int(value)
-        output.append(class_to_index[value])
-    return np.asarray(output, dtype=np.int64)
-
-
-def _subset_dataset(dataset, indices: pd.Index, flag_name: str) -> object:
-    feature_df = dataset.get(target=False)
-    target_df = dataset.get(target=True)
-    subset_df = pd.concat(
-        [feature_df.loc[indices], target_df.loc[indices]],
-        axis=1,
-    ).reindex(columns=dataset.ordered_features())
-    subset = dataset.clone()
-    subset.update(flag_name, True, df=subset_df)
-    subset.freeze()
-    return subset
-
-
-def _maybe_limit_dataset(dataset, limit: int | None, flag_name: str):
-    if limit is None or limit >= len(dataset):
-        return dataset
-    indices = dataset.get(target=False).index[: int(limit)]
-    return _subset_dataset(dataset, indices, flag_name)
-
-
-def _train_positive_reference(
-    trainset, target_model, desired_class: int | str
-) -> pd.DataFrame:
-    class_to_index = target_model.get_class_to_index()
-    desired_index = class_to_index[desired_class]
-    predicted = (
-        target_model.predict(trainset, batch_size=512).argmax(dim=1).cpu().numpy()
-    )
-    true_indices = _target_indices(trainset, class_to_index)
-    mask = (predicted == desired_index) & (true_indices == desired_index)
-    return trainset.get(target=False).loc[mask]
-
-
-def _outlier_rates(
-    train_positive_reference: pd.DataFrame,
-    counterfactual_success: pd.DataFrame,
-    neighbors: list[int],
-) -> dict[str, float]:
-    results = {}
-    if counterfactual_success.empty:
-        for neighbor in neighbors:
-            results[f"outlier_rate_k_{neighbor}"] = float("nan")
-        return results
-
-    for neighbor in neighbors:
-        model = LocalOutlierFactor(
-            n_neighbors=neighbor,
-            contamination=0.01,
-            novelty=True,
+    effective_trainset = trainset
+    if train_sample_limit is not None and train_sample_limit < len(trainset):
+        limit_df = pd.concat([trainset.get(target=False), trainset.get(target=True)], axis=1)
+        effective_trainset = trainset.clone()
+        effective_trainset.update(
+            "trainset",
+            True,
+            df=limit_df.iloc[:train_sample_limit].copy(deep=True),
         )
-        model.fit(train_positive_reference.to_numpy(dtype="float32"))
-        pred = model.predict(counterfactual_success.to_numpy(dtype="float32"))
-        results[f"outlier_rate_k_{neighbor}"] = float(np.mean(pred == -1))
-    return results
+        effective_trainset.freeze()
+        TRAIN_LIMIT_PATH.write_text(str(train_sample_limit), encoding="utf-8")
+    else:
+        TRAIN_LIMIT_PATH.write_text(str(len(trainset)), encoding="utf-8")
 
+    preparation_experiment._target_model.fit(effective_trainset)
+    logger.info(
+        "Target model trained; best_params=%s",
+        getattr(getattr(preparation_experiment._target_model, "_grid_search", None), "best_params_", None),
+    )
 
-def _connectedness_rates(
-    train_positive_reference: pd.DataFrame,
-    counterfactual_success: pd.DataFrame,
-    epsilons: list[int | float],
-    min_samples: int,
-) -> dict[str, float]:
-    results = {}
-    if counterfactual_success.empty:
-        for epsilon in epsilons:
-            results[f"not_connected_rate_eps_{epsilon}"] = float("nan")
-        return results
+    desired_class = run_config["method"]["desired_class"]
+    class_to_index = preparation_experiment._target_model.get_class_to_index()
+    predicted_test = (
+        preparation_experiment._target_model.predict(testset, batch_size=512)
+        .argmax(dim=1)
+        .cpu()
+        .numpy()
+    )
+    desired_index = class_to_index[desired_class]
+    search_mask = predicted_test != desired_index
+    candidate_indices = testset.get(target=False).index[search_mask]
+    selected_indices = (
+        candidate_indices
+        if ncounterfactuals is None
+        else candidate_indices[:ncounterfactuals]
+    )
+    TEST_INDEX_PATH.write_text(
+        json.dumps(selected_indices.tolist()),
+        encoding="utf-8",
+    )
+    logger.info(
+        "Selected %d / %d desired-class-mismatched test samples for search",
+        len(selected_indices),
+        int(search_mask.sum()),
+    )
 
-    reference = train_positive_reference.to_numpy(dtype="float32")
-    counter = counterfactual_success.to_numpy(dtype="float32")
-    for epsilon in epsilons:
-        not_connected = []
-        for row in counter:
-            density_control = np.r_[reference, row.reshape(1, -1)]
-            labels = (
-                DBSCAN(eps=float(epsilon), min_samples=min_samples)
-                .fit(density_control)
-                .labels_
-            )
-            not_connected.append(labels[-1] == -1)
-        results[f"not_connected_rate_eps_{epsilon}"] = float(np.mean(not_connected))
-    return results
+    true_target = trainset.get(target=True).iloc[:, 0]
+    true_indices = np.asarray(
+        [
+            class_to_index[int(value)] if isinstance(value, float) and float(value).is_integer() else class_to_index[value]
+            for value in true_target.tolist()
+        ],
+        dtype=np.int64,
+    )
+    predicted_train = (
+        preparation_experiment._target_model.predict(trainset, batch_size=512)
+        .argmax(dim=1)
+        .cpu()
+        .numpy()
+    )
+    positive_reference = trainset.get(target=False).loc[
+        (predicted_train == desired_index) & (true_indices == desired_index)
+    ]
+    positive_reference.to_csv(REFERENCE_PATH, index=False)
 
+    experiment = Experiment(run_config)
+    metrics = experiment.run()
+    results = {
+        "dataset": str(run_config["dataset"]["name"]),
+        "device": str(run_config["model"]["device"]),
+        "n_train": len(trainset),
+        "n_test": len(testset),
+        "n_search_candidates_total": int(search_mask.sum()),
+        "n_counterfactuals_requested": int(len(selected_indices)),
+        "n_counterfactuals_evaluated": int(len(selected_indices)),
+        "n_counterfactuals_success": (
+            int(float(metrics["validity"].iloc[0]) * len(selected_indices))
+            if math.isfinite(float(metrics["validity"].iloc[0]))
+            else 0
+        ),
+        **{key: float(value) for key, value in metrics.iloc[0].to_dict().items()},
+    }
+    result_df = pd.DataFrame([results])
 
-def _assert_results(results: pd.DataFrame, config: dict) -> None:
-    row = results.iloc[0]
-
-    if not math.isfinite(float(row["validity"])) or float(row["validity"]) <= 0.0:
+    if not math.isfinite(float(result_df.loc[0, "validity"])) or float(result_df.loc[0, "validity"]) <= 0.0:
         raise AssertionError("validity must be > 0")
-
     for neighbor in LOF_NEIGHBORS:
-        value = float(row[f"outlier_rate_k_{neighbor}"])
-        if math.isfinite(value) and value > float(OUTLIER_LIMIT):
+        value = float(result_df.loc[0, f"outlier_rate_k_{neighbor}"])
+        if math.isfinite(value) and value > OUTLIER_LIMIT:
             raise AssertionError(f"outlier_rate_k_{neighbor}={value:.4f} exceeds limit")
-
-    connectedness_value = float(row[f"not_connected_rate_eps_{CONNECTEDNESS_EPS}"])
-    if math.isfinite(connectedness_value) and connectedness_value > float(
-        CONNECTEDNESS_LIMIT
-    ):
+    connectedness_value = float(result_df.loc[0, f"not_connected_rate_eps_{CONNECTEDNESS_EPS}"])
+    if math.isfinite(connectedness_value) and connectedness_value > CONNECTEDNESS_LIMIT:
         raise AssertionError(
             f"not_connected_rate_eps_{CONNECTEDNESS_EPS}={connectedness_value:.4f} exceeds limit"
         )
 
-
-def run_reproduction(config_path: Path = DEFAULT_CONFIG_PATH) -> pd.DataFrame:
-    config = _load_config(config_path)
-    device = _resolve_device()
-    if str(config["model"]["name"]).lower() == "sklearn_logistic_regression":
-        device = "cpu"
-    config["model"]["device"] = device
-    config["method"]["device"] = device
-
-    logger = setup_logger(
-        level=config.get("logger", {}).get("level", "INFO"),
-        path=config.get("logger", {}).get("path"),
-        name=config.get("name", "cchvae_reproduce"),
-    )
-    set_cache_dir(config.get("caching", {}).get("path", "./cache/"))
-
-    logger.info("Loaded config from %s", config_path)
-    logger.info("Resolved device: %s", device)
-
-    dataset = _build_dataset(config)
-    preprocess_steps = _build_preprocess(config)
-    trainset, testset = _materialize_datasets(dataset, preprocess_steps)
-    logger.info("Train/test sizes: %d / %d", len(trainset), len(testset))
-
-    effective_trainset = _maybe_limit_dataset(
-        trainset, TRAIN_SAMPLE_LIMIT, "trainset"
-    )
-    if TRAIN_SAMPLE_LIMIT is not None:
-        logger.info(
-            "Using limited train subset for reproduction run: %d rows",
-            len(effective_trainset),
-        )
-
-    target_model = _build_model(config)
-    target_model.fit(effective_trainset)
-    logger.info(
-        "Target model trained; best_params=%s",
-        getattr(getattr(target_model, "_grid_search", None), "best_params_", None),
-    )
-
-    method = _build_method(config, target_model)
-    method.fit(effective_trainset)
-
-    desired_class = config["method"]["desired_class"]
-    class_to_index = target_model.get_class_to_index()
-    predicted_test = (
-        target_model.predict(testset, batch_size=512).argmax(dim=1).cpu().numpy()
-    )
-    if desired_class is None:
-        search_mask = np.ones_like(predicted_test, dtype=bool)
-    else:
-        desired_index = class_to_index[desired_class]
-        search_mask = predicted_test != desired_index
-    candidate_indices = testset.get(target=False).index[search_mask]
-    if NCOUNTERFACTUALS is None:
-        selected_indices = candidate_indices
-    else:
-        selected_indices = candidate_indices[:NCOUNTERFACTUALS]
-    factual_subset = _subset_dataset(testset, selected_indices, "testset")
-    logger.info(
-        "Selected %d / %d desired-class-mismatched test samples for search",
-        len(factual_subset),
-        int(search_mask.sum()),
-    )
-
-    counterfactuals = method.predict(
-        factual_subset, batch_size=max(len(factual_subset), 1)
-    )
-
-    validity = ValidityEvaluation().evaluate(factual_subset, counterfactuals)
-    factual_features, counterfactual_features, evaluation_mask, success_mask = (
-        resolve_evaluation_inputs(factual_subset, counterfactuals)
-    )
-    selected_mask = evaluation_mask & success_mask
-    factual_success = factual_features.loc[selected_mask.to_numpy()]
-    counterfactual_success = counterfactual_features.loc[selected_mask.to_numpy()]
-    train_positive_reference = _train_positive_reference(
-        trainset=effective_trainset,
-        target_model=target_model,
-        desired_class=desired_class,
-    )
-
-    results = {
-        "dataset": str(config["dataset"]["name"]),
-        "device": device,
-        "n_train": len(trainset),
-        "n_test": len(testset),
-        "n_search_candidates_total": int(search_mask.sum()),
-        "n_counterfactuals_requested": len(selected_indices),
-        "n_counterfactuals_evaluated": len(factual_subset),
-        "n_counterfactuals_success": int(selected_mask.sum()),
-        "validity": float(validity.iloc[0]["validity"]),
-    }
-    results.update(
-        _outlier_rates(
-            train_positive_reference=train_positive_reference,
-            counterfactual_success=counterfactual_success,
-            neighbors=LOF_NEIGHBORS,
-        )
-    )
-    results.update(
-        _connectedness_rates(
-            train_positive_reference=train_positive_reference,
-            counterfactual_success=counterfactual_success,
-            epsilons=CONNECTEDNESS_EPSILONS,
-            min_samples=DBSCAN_MIN_SAMPLES,
-        )
-    )
-
-    metrics = pd.DataFrame([results])
-    _assert_results(metrics, config)
-    logger.info("Reproduction metrics:\n%s", metrics.to_string(index=False))
-    print(metrics.to_string(index=False))
-    return metrics
+    logger.info("Reproduction metrics:\n%s", result_df.to_string(index=False))
+    print(result_df.to_string(index=False))
+    return result_df
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-p",
-        "--path",
-        default=str(DEFAULT_CONFIG_PATH),
-        help="Path to the reproduction YAML config",
-    )
+    parser.add_argument("--prepare-path", default=str(PREPARE_CONFIG_PATH))
+    parser.add_argument("--run-path", default=str(RUN_CONFIG_PATH))
+    parser.add_argument("--train-sample-limit", type=int, default=None)
+    parser.add_argument("--ncounterfactuals", type=int, default=None)
     args = parser.parse_args()
-    run_reproduction(Path(args.path))
+    run_reproduction(
+        prepare_config_path=Path(args.prepare_path),
+        run_config_path=Path(args.run_path),
+        train_sample_limit=args.train_sample_limit,
+        ncounterfactuals=args.ncounterfactuals,
+    )
 
 
 if __name__ == "__main__":

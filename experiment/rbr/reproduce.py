@@ -20,12 +20,16 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
 from dataset.german.german import GermanDataset
-from dataset.german_roar.german_roar import GermanRoarDataset
+from experiment import Experiment
 from method.rbr.rbr import RbrMethod
 from model.mlp.mlp import MlpModel
+from preprocess.preprocess_object import PreProcessObject
+from utils.registry import get_registry, register
 
 DEFAULT_CURRENT_CONFIG = "./experiment/rbr/german_mlp_rbr_reproduce_current.yaml"
 DEFAULT_FUTURE_CONFIG = "./experiment/rbr/german_mlp_rbr_reproduce_future.yaml"
+LOCAL_SELECT_PREPROCESS_NAME = "rbr_select_columns_local"
+LOCAL_MERGE_PREPROCESS_NAME = "rbr_merge_dataset_local"
 PAPER_GERMAN_METRICS = {
     "present_accuracy": "0.67 ± 0.02",
     "present_auc": "0.60 ± 0.03",
@@ -37,6 +41,95 @@ RECOURSE_BENCHMARKS_FUTURE_VALIDITY_MIN = 0.7
 NUMERICAL_FEATURES = ["age", "amount", "duration"]
 TARGET_COLUMN = "credit_risk"
 CATEGORICAL_FEATURE = "personal_status_sex"
+SELECTED_COLUMNS = ["duration", "amount", "age", CATEGORICAL_FEATURE]
+
+
+def _snapshot_dataset(dataset) -> pd.DataFrame:
+    if getattr(dataset, "_freeze", False):
+        return pd.concat([dataset.get(target=False), dataset.get(target=True)], axis=1)
+    return dataset.snapshot()
+
+
+@register(LOCAL_SELECT_PREPROCESS_NAME)
+class SelectColumnsPreProcess(PreProcessObject):
+    def __init__(self, seed: int | None = None, columns: list[str] | None = None, **kwargs):
+        del kwargs
+        self._seed = seed
+        self._columns = list(columns or SELECTED_COLUMNS)
+
+    def transform(self, input):
+        df = _snapshot_dataset(input)
+        selected_columns = [*self._columns, input.target_column]
+        missing = [column for column in selected_columns if column not in df.columns]
+        if missing:
+            raise ValueError(f"Missing columns for SelectColumnsPreProcess: {missing}")
+        output = input if not getattr(input, "_freeze", False) else input.clone()
+        output.update(
+            "selected_columns",
+            list(self._columns),
+            df=df.loc[:, selected_columns].copy(deep=True),
+        )
+        return output
+
+
+@register(LOCAL_MERGE_PREPROCESS_NAME)
+class MergeDatasetPreProcess(PreProcessObject):
+    def __init__(
+        self,
+        seed: int | None = None,
+        merge_dataset_name: str = "german_roar",
+        merge_dataset_path: str | None = None,
+        columns: list[str] | None = None,
+        train_fraction: float | None = None,
+        random_state: int | None = None,
+        dataset_flag: str | None = None,
+        **kwargs,
+    ):
+        del kwargs
+        self._seed = seed
+        self._merge_dataset_name = str(merge_dataset_name)
+        self._merge_dataset_path = merge_dataset_path
+        self._columns = list(columns or SELECTED_COLUMNS)
+        self._train_fraction = (
+            None if train_fraction is None else float(train_fraction)
+        )
+        self._random_state = random_state
+        self._dataset_flag = dataset_flag
+
+    def transform(self, input):
+        merge_cfg = {"path": self._merge_dataset_path} if self._merge_dataset_path else {}
+        dataset_cls = get_registry("dataset")[self._merge_dataset_name]
+        merge_dataset = dataset_cls(**merge_cfg)
+        merge_df = merge_dataset.snapshot().loc[
+            :, [*self._columns, merge_dataset.target_column]
+        ].copy(deep=True)
+        if self._train_fraction is not None:
+            if not 0.0 < self._train_fraction < 1.0:
+                raise ValueError("train_fraction must satisfy 0 < value < 1")
+            X = merge_df.drop(columns=[merge_dataset.target_column])
+            y = merge_df[merge_dataset.target_column].astype(int)
+            merge_X, _, merge_y, _ = train_test_split(
+                X,
+                y,
+                train_size=self._train_fraction,
+                random_state=self._random_state,
+                stratify=y,
+            )
+            merge_df = pd.concat(
+                [merge_X, merge_y.rename(merge_dataset.target_column)],
+                axis=1,
+            ).loc[:, [*self._columns, merge_dataset.target_column]]
+
+        input_df = _snapshot_dataset(input).loc[
+            :, [*self._columns, input.target_column]
+        ].copy(deep=True)
+        merged_df = pd.concat([input_df, merge_df], ignore_index=True)
+
+        output = input.clone()
+        output.update("merged_dataset", True, df=merged_df)
+        if self._dataset_flag is not None:
+            output.update(self._dataset_flag, True)
+        return output
 
 
 def _load_config(config_path: Path) -> dict:
@@ -51,25 +144,10 @@ def _resolve_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
-def _load_raw_german_frames() -> tuple[pd.DataFrame, pd.DataFrame]:
-    current_dataset = GermanDataset()
-    shifted_dataset = GermanRoarDataset()
-    current_df = current_dataset.snapshot().copy(deep=True)
-    shifted_df = shifted_dataset.snapshot().copy(deep=True)
-    return current_df, shifted_df
-
-
 def _build_reference_transformer(
-    current_df: pd.DataFrame,
-    shifted_df: pd.DataFrame,
+    reference_df: pd.DataFrame,
 ) -> tuple[ColumnTransformer, list[str], dict[str, list[str]]]:
-    combined = pd.concat(
-        [
-            current_df.drop(columns=[TARGET_COLUMN]),
-            shifted_df.drop(columns=[TARGET_COLUMN]),
-        ],
-        ignore_index=True,
-    )
+    combined = reference_df.drop(columns=[TARGET_COLUMN]).copy(deep=True)
     categorical_features = [
         column
         for column in combined.columns
@@ -102,6 +180,36 @@ def _build_reference_transformer(
     feature_names = list(NUMERICAL_FEATURES) + cat_columns
     encoding_map = {CATEGORICAL_FEATURE: cat_columns}
     return transformer, feature_names, encoding_map
+
+
+def _materialize_datasets(experiment: Experiment):
+    datasets = [experiment._raw_dataset]
+    for preprocess_step in experiment._preprocess:
+        next_datasets = []
+        for current_dataset in datasets:
+            transformed = preprocess_step.transform(current_dataset)
+            if isinstance(transformed, tuple):
+                next_datasets.extend(list(transformed))
+            else:
+                next_datasets.append(transformed)
+        datasets = next_datasets
+    return experiment._resolve_train_test(datasets)
+
+
+def _materialize_single_dataset(experiment: Experiment):
+    datasets = [experiment._raw_dataset]
+    for preprocess_step in experiment._preprocess:
+        next_datasets = []
+        for current_dataset in datasets:
+            transformed = preprocess_step.transform(current_dataset)
+            if isinstance(transformed, tuple):
+                next_datasets.extend(list(transformed))
+            else:
+                next_datasets.append(transformed)
+        datasets = next_datasets
+    if len(datasets) != 1:
+        raise ValueError("Expected exactly one dataset after preprocessing")
+    return datasets[0]
 
 
 def _transform_features(
@@ -189,6 +297,16 @@ def _make_frozen_processed_dataset(
     dataset.update(dataset_flag, True)
     dataset.freeze()
     return dataset
+
+
+def _build_experiment_config(
+    config: dict,
+    preprocess_steps: list[dict],
+) -> dict:
+    experiment_cfg = deepcopy(config)
+    experiment_cfg["preprocess"] = deepcopy(preprocess_steps)
+    experiment_cfg.setdefault("evaluation", [])
+    return experiment_cfg
 
 
 def _compute_model_metrics(model: MlpModel, testset) -> dict[str, float]:
@@ -381,35 +499,14 @@ def _build_rbr_from_config(
     )
 
 
-def _split_current_data(
-    current_df: pd.DataFrame,
-    train_split: float,
-    random_state: int,
-) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-    X = current_df.drop(columns=[TARGET_COLUMN])
-    y = current_df[TARGET_COLUMN].astype(int)
-    return train_test_split(
-        X,
-        y,
-        train_size=train_split,
-        random_state=random_state,
-        stratify=y,
-    )
-
-
 def _build_future_trainsets(
     template_dataset: GermanDataset,
     transformer: ColumnTransformer,
     feature_names: list[str],
     encoding_map: dict[str, list[str]],
-    current_X_train: pd.DataFrame,
-    current_y_train: pd.Series,
-    shifted_df: pd.DataFrame,
+    current_trainset_raw,
     future_cfg: dict,
 ) -> list[object]:
-    shifted_X = shifted_df.drop(columns=[TARGET_COLUMN])
-    shifted_y = shifted_df[TARGET_COLUMN].astype(int)
-
     experiment_cfg = future_cfg.get("experiment", {})
     shifted_train_fraction = float(experiment_cfg.get("shifted_train_fraction", 0.5))
     shifted_model_random_states = list(
@@ -418,15 +515,16 @@ def _build_future_trainsets(
 
     future_trainsets = []
     for random_state in shifted_model_random_states:
-        shifted_X_train, _, shifted_y_train, _ = train_test_split(
-            shifted_X,
-            shifted_y,
-            train_size=shifted_train_fraction,
+        merged_raw_dataset = MergeDatasetPreProcess(
+            merge_dataset_name="german_roar",
+            columns=SELECTED_COLUMNS,
+            train_fraction=shifted_train_fraction,
             random_state=int(random_state),
-            stratify=shifted_y,
-        )
-        future_X_raw = pd.concat([current_X_train, shifted_X_train], ignore_index=True)
-        future_y = pd.concat([current_y_train, shifted_y_train], ignore_index=True)
+            dataset_flag="trainset",
+        ).transform(current_trainset_raw)
+        merged_raw_df = _snapshot_dataset(merged_raw_dataset)
+        future_X_raw = merged_raw_df.drop(columns=[TARGET_COLUMN])
+        future_y = merged_raw_df[TARGET_COLUMN].astype(int)
         future_X = _transform_features(transformer, future_X_raw, feature_names)
         future_trainsets.append(
             _make_frozen_processed_dataset(
@@ -486,31 +584,48 @@ def run_reproduction(
     current_cfg = _load_config((PROJECT_ROOT / current_config_path).resolve())
     future_cfg = _load_config((PROJECT_ROOT / future_config_path).resolve())
 
-    current_raw_df, shifted_raw_df = _load_raw_german_frames()
+    current_preprocess = [
+        {"name": LOCAL_SELECT_PREPROCESS_NAME, "columns": SELECTED_COLUMNS},
+        {
+            "name": "split",
+            "seed": int(current_cfg.get("experiment", {}).get("split_random_state", 42)),
+            "split": 1.0 - float(current_cfg.get("experiment", {}).get("train_split", 0.8)),
+        },
+        {"name": "finalize"},
+    ]
+    reference_preprocess = [
+        {"name": LOCAL_SELECT_PREPROCESS_NAME, "columns": SELECTED_COLUMNS},
+        {
+            "name": LOCAL_MERGE_PREPROCESS_NAME,
+            "merge_dataset_name": "german_roar",
+            "columns": SELECTED_COLUMNS,
+        },
+        {"name": "finalize"},
+    ]
+
+    current_raw_experiment = Experiment(
+        _build_experiment_config(current_cfg, current_preprocess)
+    )
+    current_trainset_raw, current_testset_raw = _materialize_datasets(current_raw_experiment)
+
+    reference_experiment = Experiment(
+        _build_experiment_config(current_cfg, reference_preprocess)
+    )
+    reference_dataset = _materialize_single_dataset(reference_experiment)
     transformer, feature_names, encoding_map = _build_reference_transformer(
-        current_raw_df,
-        shifted_raw_df,
+        _snapshot_dataset(reference_dataset)
     )
 
-    train_split = float(current_cfg.get("experiment", {}).get("train_split", 0.8))
-    split_random_state = int(
-        current_cfg.get("experiment", {}).get("split_random_state", 42)
-    )
-    current_X_train_raw, current_X_test_raw, current_y_train, current_y_test = (
-        _split_current_data(
-            current_raw_df,
-            train_split=train_split,
-            random_state=split_random_state,
-        )
-    )
+    current_train_raw_df = _snapshot_dataset(current_trainset_raw)
+    current_test_raw_df = _snapshot_dataset(current_testset_raw)
     current_X_train = _transform_features(
         transformer,
-        current_X_train_raw,
+        current_train_raw_df.drop(columns=[TARGET_COLUMN]),
         feature_names,
     )
     current_X_test = _transform_features(
         transformer,
-        current_X_test_raw,
+        current_test_raw_df.drop(columns=[TARGET_COLUMN]),
         feature_names,
     )
 
@@ -518,7 +633,7 @@ def run_reproduction(
     current_trainset = _make_frozen_processed_dataset(
         template_dataset=current_template_dataset,
         X=current_X_train,
-        y=current_y_train,
+        y=current_train_raw_df[TARGET_COLUMN].astype(int),
         feature_names=feature_names,
         encoding_map=encoding_map,
         dataset_flag="trainset",
@@ -526,7 +641,7 @@ def run_reproduction(
     current_testset = _make_frozen_processed_dataset(
         template_dataset=current_template_dataset,
         X=current_X_test,
-        y=current_y_test,
+        y=current_test_raw_df[TARGET_COLUMN].astype(int),
         feature_names=feature_names,
         encoding_map=encoding_map,
         dataset_flag="testset",
@@ -550,9 +665,7 @@ def run_reproduction(
         transformer=transformer,
         feature_names=feature_names,
         encoding_map=encoding_map,
-        current_X_train=current_X_train_raw,
-        current_y_train=current_y_train,
-        shifted_df=shifted_raw_df,
+        current_trainset_raw=current_trainset_raw,
         future_cfg=future_cfg,
     )
     future_models = []

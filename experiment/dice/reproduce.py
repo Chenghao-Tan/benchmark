@@ -27,8 +27,6 @@ import method  # noqa: F401
 import model  # noqa: F401
 import preprocess  # noqa: F401
 from experiment import Experiment
-from utils.caching import set_cache_dir
-from utils.logger import setup_logger
 from utils.registry import get_registry
 
 DEFAULT_CONFIG_PATH = Path(__file__).with_name("compas_mlp_dice_reproduce.yaml")
@@ -932,14 +930,8 @@ def _run_candidate(
     assert_paper: bool,
 ) -> dict[str, object]:
     device = _resolve_device()
-    logger = setup_logger(
-        level=config.get("logger", {}).get("level", "INFO"),
-        path=config.get("logger", {}).get("path"),
-        name=config.get("name", "dice_reproduce"),
-    )
-    set_cache_dir(config.get("caching", {}).get("path", "./cache/"))
-
     experiment = Experiment(config)
+    logger = experiment._logger
     trainset, testset = _materialize_datasets(experiment)
     logger.info("Train/test sizes: %d / %d", len(trainset), len(testset))
 
@@ -974,6 +966,8 @@ def _run_candidate(
 
     summary_rows: list[dict[str, float | int | str]] = []
     boundary_rows: list[dict[str, float | int | str]] = []
+    # These comparisons are inherently set-level and surrogate-model based, so they stay
+    # in reproduce.py instead of being forced into Experiment.evaluation.
     method_overrides = {
         "DiverseCF": {
             "algorithm": "DiverseCF",

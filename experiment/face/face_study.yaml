@@ -1,0 +1,573 @@
+runs:
+  - group: kde
+    label: kde_eps_0.25
+    mode: kde
+    epsilon: 0.25
+    prediction_threshold: 0.75
+    density_threshold: 0.001
+    caption: "epsilon = 0.25"
+    triptych_output_path: "./cache/face/kde_triptych.png"
+    query_point: { x1: 0.1465, x2: 0.7269, y: 0 }
+    experiment:
+      name: synthetic_face_kde_eps_0.25
+      logger: { level: INFO, path: ./logs/synthetic_face_kde_eps_0.25.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+      model:
+        name: mlp
+        seed: 482
+        device: cuda
+        epochs: 320
+        learning_rate: 0.01
+        batch_size: 16
+        layers: [10, 10]
+        optimizer: adam
+        criterion: cross_entropy
+        output_activation: softmax
+        save_name: null
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: kde
+        epsilon: 0.25
+        prediction_threshold: 0.75
+        density_threshold: 0.001
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: validity }
+        - { name: distance, metrics: [l2] }
+        - { name: face_path_metrics_local }
+    query_experiment:
+      name: synthetic_face_kde_eps_0.25_query
+      logger: { level: INFO, path: ./logs/synthetic_face_kde_eps_0.25_query.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+        - { name: face_query_local, x1: 0.1465, x2: 0.7269, y: 0 }
+      model:
+        name: mlp
+        seed: 482
+        device: cuda
+        epochs: 320
+        learning_rate: 0.01
+        batch_size: 16
+        layers: [10, 10]
+        optimizer: adam
+        criterion: cross_entropy
+        output_activation: softmax
+        save_name: null
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: kde
+        epsilon: 0.25
+        prediction_threshold: 0.75
+        density_threshold: 0.001
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: face_query_summary_local }
+
+  - group: kde
+    label: kde_eps_0.50
+    mode: kde
+    epsilon: 0.50
+    prediction_threshold: 0.75
+    density_threshold: 0.001
+    caption: "epsilon = 0.50"
+    triptych_output_path: "./cache/face/kde_triptych.png"
+    query_point: { x1: 0.1465, x2: 0.7269, y: 0 }
+    experiment:
+      name: synthetic_face_kde_eps_0.50
+      logger: { level: INFO, path: ./logs/synthetic_face_kde_eps_0.50.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+      model: &face_model
+        name: mlp
+        seed: 482
+        device: cuda
+        epochs: 320
+        learning_rate: 0.01
+        batch_size: 16
+        layers: [10, 10]
+        optimizer: adam
+        criterion: cross_entropy
+        output_activation: softmax
+        save_name: null
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: kde
+        epsilon: 0.50
+        prediction_threshold: 0.75
+        density_threshold: 0.001
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: validity }
+        - { name: distance, metrics: [l2] }
+        - { name: face_path_metrics_local }
+    query_experiment:
+      name: synthetic_face_kde_eps_0.50_query
+      logger: { level: INFO, path: ./logs/synthetic_face_kde_eps_0.50_query.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+        - { name: face_query_local, x1: 0.1465, x2: 0.7269, y: 0 }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: kde
+        epsilon: 0.50
+        prediction_threshold: 0.75
+        density_threshold: 0.001
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: face_query_summary_local }
+
+  - group: kde
+    label: kde_eps_2.00
+    mode: kde
+    epsilon: 2.00
+    prediction_threshold: 0.75
+    density_threshold: 0.001
+    caption: "epsilon = 2.00"
+    triptych_output_path: "./cache/face/kde_triptych.png"
+    query_point: { x1: 0.1465, x2: 0.7269, y: 0 }
+    experiment:
+      name: synthetic_face_kde_eps_2.00
+      logger: { level: INFO, path: ./logs/synthetic_face_kde_eps_2.00.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: kde
+        epsilon: 2.00
+        prediction_threshold: 0.75
+        density_threshold: 0.001
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: validity }
+        - { name: distance, metrics: [l2] }
+        - { name: face_path_metrics_local }
+    query_experiment:
+      name: synthetic_face_kde_eps_2.00_query
+      logger: { level: INFO, path: ./logs/synthetic_face_kde_eps_2.00_query.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+        - { name: face_query_local, x1: 0.1465, x2: 0.7269, y: 0 }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: kde
+        epsilon: 2.00
+        prediction_threshold: 0.75
+        density_threshold: 0.001
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: face_query_summary_local }
+
+  - group: epsilon
+    label: epsilon_eps_0.25
+    mode: epsilon
+    epsilon: 0.25
+    prediction_threshold: 0.75
+    density_threshold: null
+    caption: "epsilon = 0.25"
+    triptych_output_path: "./cache/face/epsilon_triptych.png"
+    query_point: { x1: 0.1465, x2: 0.7269, y: 0 }
+    experiment:
+      name: synthetic_face_epsilon_eps_0.25
+      logger: { level: INFO, path: ./logs/synthetic_face_epsilon_eps_0.25.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: epsilon
+        epsilon: 0.25
+        prediction_threshold: 0.75
+        density_threshold: null
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: validity }
+        - { name: distance, metrics: [l2] }
+        - { name: face_path_metrics_local }
+    query_experiment:
+      name: synthetic_face_epsilon_eps_0.25_query
+      logger: { level: INFO, path: ./logs/synthetic_face_epsilon_eps_0.25_query.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+        - { name: face_query_local, x1: 0.1465, x2: 0.7269, y: 0 }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: epsilon
+        epsilon: 0.25
+        prediction_threshold: 0.75
+        density_threshold: null
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: face_query_summary_local }
+
+  - group: epsilon
+    label: epsilon_eps_0.50
+    mode: epsilon
+    epsilon: 0.50
+    prediction_threshold: 0.75
+    density_threshold: null
+    caption: "epsilon = 0.50"
+    triptych_output_path: "./cache/face/epsilon_triptych.png"
+    query_point: { x1: 0.1465, x2: 0.7269, y: 0 }
+    experiment:
+      name: synthetic_face_epsilon_eps_0.50
+      logger: { level: INFO, path: ./logs/synthetic_face_epsilon_eps_0.50.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: epsilon
+        epsilon: 0.50
+        prediction_threshold: 0.75
+        density_threshold: null
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: validity }
+        - { name: distance, metrics: [l2] }
+        - { name: face_path_metrics_local }
+    query_experiment:
+      name: synthetic_face_epsilon_eps_0.50_query
+      logger: { level: INFO, path: ./logs/synthetic_face_epsilon_eps_0.50_query.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+        - { name: face_query_local, x1: 0.1465, x2: 0.7269, y: 0 }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: epsilon
+        epsilon: 0.50
+        prediction_threshold: 0.75
+        density_threshold: null
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: face_query_summary_local }
+
+  - group: epsilon
+    label: epsilon_eps_1.00
+    mode: epsilon
+    epsilon: 1.00
+    prediction_threshold: 0.75
+    density_threshold: null
+    caption: "epsilon = 1.00"
+    triptych_output_path: "./cache/face/epsilon_triptych.png"
+    query_point: { x1: 0.1465, x2: 0.7269, y: 0 }
+    experiment:
+      name: synthetic_face_epsilon_eps_1.00
+      logger: { level: INFO, path: ./logs/synthetic_face_epsilon_eps_1.00.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: epsilon
+        epsilon: 1.00
+        prediction_threshold: 0.75
+        density_threshold: null
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: validity }
+        - { name: distance, metrics: [l2] }
+        - { name: face_path_metrics_local }
+    query_experiment:
+      name: synthetic_face_epsilon_eps_1.00_query
+      logger: { level: INFO, path: ./logs/synthetic_face_epsilon_eps_1.00_query.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+        - { name: face_query_local, x1: 0.1465, x2: 0.7269, y: 0 }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: epsilon
+        epsilon: 1.00
+        prediction_threshold: 0.75
+        density_threshold: null
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: face_query_summary_local }
+
+  - group: knn
+    label: knn_k_2_eps_0.25
+    mode: knn
+    epsilon: 0.25
+    k_neighbors: 2
+    prediction_threshold: 0.75
+    density_threshold: null
+    caption: "k = 2, epsilon = 0.25"
+    triptych_output_path: "./cache/face/knn_triptych.png"
+    query_point: { x1: 0.1465, x2: 0.7269, y: 0 }
+    experiment:
+      name: synthetic_face_knn_k_2_eps_0.25
+      logger: { level: INFO, path: ./logs/synthetic_face_knn_k_2_eps_0.25.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: knn
+        k_neighbors: 2
+        epsilon: 0.25
+        prediction_threshold: 0.75
+        density_threshold: null
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: validity }
+        - { name: distance, metrics: [l2] }
+        - { name: face_path_metrics_local }
+    query_experiment:
+      name: synthetic_face_knn_k_2_eps_0.25_query
+      logger: { level: INFO, path: ./logs/synthetic_face_knn_k_2_eps_0.25_query.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+        - { name: face_query_local, x1: 0.1465, x2: 0.7269, y: 0 }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: knn
+        k_neighbors: 2
+        epsilon: 0.25
+        prediction_threshold: 0.75
+        density_threshold: null
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: face_query_summary_local }
+
+  - group: knn
+    label: knn_k_4_eps_0.35
+    mode: knn
+    epsilon: 0.35
+    k_neighbors: 4
+    prediction_threshold: 0.75
+    density_threshold: null
+    caption: "k = 4, epsilon = 0.35"
+    triptych_output_path: "./cache/face/knn_triptych.png"
+    query_point: { x1: 0.1465, x2: 0.7269, y: 0 }
+    experiment:
+      name: synthetic_face_knn_k_4_eps_0.35
+      logger: { level: INFO, path: ./logs/synthetic_face_knn_k_4_eps_0.35.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: knn
+        k_neighbors: 4
+        epsilon: 0.35
+        prediction_threshold: 0.75
+        density_threshold: null
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: validity }
+        - { name: distance, metrics: [l2] }
+        - { name: face_path_metrics_local }
+    query_experiment:
+      name: synthetic_face_knn_k_4_eps_0.35_query
+      logger: { level: INFO, path: ./logs/synthetic_face_knn_k_4_eps_0.35_query.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+        - { name: face_query_local, x1: 0.1465, x2: 0.7269, y: 0 }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: knn
+        k_neighbors: 4
+        epsilon: 0.35
+        prediction_threshold: 0.75
+        density_threshold: null
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: face_query_summary_local }
+
+  - group: knn
+    label: knn_k_10_eps_0.80
+    mode: knn
+    epsilon: 0.80
+    k_neighbors: 10
+    prediction_threshold: 0.75
+    density_threshold: null
+    caption: "k = 10, epsilon = 0.80"
+    triptych_output_path: "./cache/face/knn_triptych.png"
+    query_point: { x1: 0.1465, x2: 0.7269, y: 0 }
+    experiment:
+      name: synthetic_face_knn_k_10_eps_0.80
+      logger: { level: INFO, path: ./logs/synthetic_face_knn_k_10_eps_0.80.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: knn
+        k_neighbors: 10
+        epsilon: 0.80
+        prediction_threshold: 0.75
+        density_threshold: null
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: validity }
+        - { name: distance, metrics: [l2] }
+        - { name: face_path_metrics_local }
+    query_experiment:
+      name: synthetic_face_knn_k_10_eps_0.80_query
+      logger: { level: INFO, path: ./logs/synthetic_face_knn_k_10_eps_0.80_query.log }
+      caching: { path: ./cache/ }
+      dataset: { name: synthetic_face }
+      preprocess:
+        - { name: scale, seed: 482, scaling: normalize, range: true }
+        - { name: face_query_local, x1: 0.1465, x2: 0.7269, y: 0 }
+      model: *face_model
+      method:
+        name: face
+        seed: 482
+        device: cuda
+        desired_class: 1
+        mode: knn
+        k_neighbors: 10
+        epsilon: 0.80
+        prediction_threshold: 0.75
+        density_threshold: null
+        weight_function: negative_log
+        kde_bandwidth: 0.5
+        kde_kernel: tophat
+        store_top_k_paths: 5
+      evaluation:
+        - { name: face_query_summary_local }

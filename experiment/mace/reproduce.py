@@ -15,15 +15,21 @@ import numpy as np
 import pandas as pd
 import yaml
 
+from preprocess.preprocess_object import PreProcessObject
+from evaluation.evaluation_object import EvaluationObject
 from evaluation.evaluation_utils import resolve_evaluation_inputs
 from experiment import Experiment
 from method.mace.library import normalizedDistance
+from dataset.dataset_object import DatasetObject
+from utils.registry import register
 
 DEFAULT_CONFIG_PATHS = {
     "adult": Path(__file__).with_name("adult_randomforest_mace_reproduce.yaml"),
     "credit": Path(__file__).with_name("credit_randomforest_mace_reproduce.yaml"),
     "compas": Path(__file__).with_name("compas_randomforest_mace_reproduce.yaml"),
 }
+LOCAL_DISTANCE_EVALUATION_NAME = "mace_normalized_distance_local"
+LOCAL_SELECT_PREPROCESS_NAME = "mace_select_test_indices_local"
 EPSILON_SEQUENCE = [1.0e-1, 1.0e-3, 1.0e-5]
 NORM_TO_METRIC = {
     "zero_norm": "distance_l0",
@@ -35,6 +41,326 @@ MACE_DISTANCE_NORMS = {
     "distance_l1": "one_norm",
     "distance_linf": "infty_norm",
 }
+
+
+@register(LOCAL_SELECT_PREPROCESS_NAME)
+class MaceSelectTestIndicesPreProcess(PreProcessObject):
+    def __init__(
+        self,
+        seed: int | None = None,
+        indices: list[int] | list[str] | None = None,
+        **kwargs,
+    ):
+        del kwargs
+        self._seed = seed
+        self._indices = [] if indices is None else list(indices)
+
+    def transform(self, input):
+        if not getattr(input, "testset", False):
+            return input
+        filtered_df = input.snapshot().loc[self._indices].copy(deep=True)
+        input.update("selected_test_indices", list(self._indices), df=filtered_df)
+        return input
+
+
+def _dataset_has_attr(dataset, flag: str) -> bool:
+    try:
+        dataset.attr(flag)
+    except AttributeError:
+        return False
+    return True
+
+
+def _is_integer_valued(series: pd.Series) -> bool:
+    values = series.dropna().to_numpy(dtype="float64")
+    if values.size == 0:
+        return False
+    return bool(np.allclose(values, np.round(values)))
+
+
+def _normalize_actionability(value: object) -> str:
+    normalized = str(value).lower()
+    if normalized == "same":
+        return "none"
+    if normalized not in {"none", "any", "same-or-increase", "same-or-decrease"}:
+        raise ValueError(f"Unsupported MACE actionability: {value}")
+    return normalized
+
+
+class _LocalMaceAttribute:
+    def __init__(
+        self,
+        *,
+        attr_name_kurz: str,
+        attr_type: str,
+        lower_bound: float,
+        upper_bound: float,
+        mutability: bool,
+        actionability: str,
+    ):
+        self.attr_name_kurz = attr_name_kurz
+        self.attr_type = attr_type
+        self.lower_bound = lower_bound
+        self.upper_bound = upper_bound
+        self.mutability = mutability
+        self.actionability = actionability
+
+
+class _LocalMaceDatasetWrapper:
+    def __init__(
+        self,
+        *,
+        dataset_name: str,
+        feature_names: list[str],
+        feature_types: dict[str, str],
+        bounds: dict[str, tuple[float, float]],
+        mutability: dict[str, bool],
+        actionability: dict[str, str],
+    ):
+        self.dataset_name = dataset_name
+        self.is_one_hot = False
+        self._feature_names = list(feature_names)
+        self._feature_types = dict(feature_types)
+        self._short_names = {
+            feature_name: f"x{index}"
+            for index, feature_name in enumerate(self._feature_names)
+        }
+        self._inverse_short_names = {
+            short_name: feature_name
+            for feature_name, short_name in self._short_names.items()
+        }
+        self.attributes_kurz: dict[str, _LocalMaceAttribute] = {}
+
+        for feature_name in self._feature_names:
+            short_name = self._short_names[feature_name]
+            lower_bound, upper_bound = bounds[feature_name]
+            self.attributes_kurz[short_name] = _LocalMaceAttribute(
+                attr_name_kurz=short_name,
+                attr_type=str(feature_types[feature_name]),
+                lower_bound=float(lower_bound),
+                upper_bound=float(upper_bound),
+                mutability=bool(mutability[feature_name]),
+                actionability=str(actionability[feature_name]).lower(),
+            )
+        self.attributes_kurz["y"] = _LocalMaceAttribute(
+            attr_name_kurz="y",
+            attr_type="binary",
+            lower_bound=0.0,
+            upper_bound=1.0,
+            mutability=False,
+            actionability="none",
+        )
+
+    @classmethod
+    def from_dataset(cls, dataset) -> "_LocalMaceDatasetWrapper":
+        feature_df = dataset.get(target=False)
+        feature_names = list(feature_df.columns)
+
+        has_all_mace_metadata = all(
+            _dataset_has_attr(dataset, key)
+            for key in (
+                "mace_feature_type",
+                "mace_feature_mutability",
+                "mace_feature_actionability",
+            )
+        )
+        if has_all_mace_metadata:
+            feature_type_raw = dataset.attr("mace_feature_type")
+            feature_mutability_raw = dataset.attr("mace_feature_mutability")
+            feature_actionability_raw = dataset.attr("mace_feature_actionability")
+            feature_type = {
+                feature_name: str(feature_type_raw[feature_name]).lower()
+                for feature_name in feature_names
+            }
+        else:
+            raw_feature_type = dataset.attr("raw_feature_type")
+            feature_mutability_raw = dataset.attr("raw_feature_mutability")
+            feature_actionability_raw = dataset.attr("raw_feature_actionability")
+            feature_type = {}
+            for feature_name in feature_names:
+                raw_type = str(raw_feature_type[feature_name]).lower()
+                if raw_type == "numerical":
+                    feature_type[feature_name] = (
+                        "numeric-int"
+                        if _is_integer_valued(feature_df[feature_name])
+                        else "numeric-real"
+                    )
+                elif raw_type in {"binary", "categorical"}:
+                    feature_type[feature_name] = raw_type
+                else:
+                    raise ValueError(
+                        f"Unsupported raw_feature_type for MACE fallback: {raw_type}"
+                    )
+
+        feature_min = None
+        feature_max = None
+        if _dataset_has_attr(dataset, "balanced"):
+            balanced = dataset.attr("balanced")
+            if isinstance(balanced, dict):
+                raw_feature_min = balanced.get("feature_min")
+                raw_feature_max = balanced.get("feature_max")
+                if isinstance(raw_feature_min, dict) and isinstance(
+                    raw_feature_max, dict
+                ):
+                    feature_min = {
+                        feature_name: float(raw_feature_min[feature_name])
+                        for feature_name in feature_names
+                    }
+                    feature_max = {
+                        feature_name: float(raw_feature_max[feature_name])
+                        for feature_name in feature_names
+                    }
+
+        bounds = {}
+        for feature_name in feature_names:
+            if feature_min is not None and feature_max is not None:
+                bounds[feature_name] = (
+                    float(feature_min[feature_name]),
+                    float(feature_max[feature_name]),
+                )
+            else:
+                bounds[feature_name] = (
+                    float(feature_df[feature_name].min()),
+                    float(feature_df[feature_name].max()),
+                )
+
+        feature_mutability = {
+            feature_name: bool(feature_mutability_raw[feature_name])
+            for feature_name in feature_names
+        }
+        feature_actionability = {
+            feature_name: _normalize_actionability(
+                feature_actionability_raw[feature_name]
+            )
+            for feature_name in feature_names
+        }
+        dataset_name = str(dataset.attr("name")) if _dataset_has_attr(dataset, "name") else ""
+        return cls(
+            dataset_name=dataset_name,
+            feature_names=feature_names,
+            feature_types=feature_type,
+            bounds=bounds,
+            mutability=feature_mutability,
+            actionability=feature_actionability,
+        )
+
+    def getInputAttributeNames(self, kind: str = "kurz"):
+        del kind
+        return [self._short_names[feature_name] for feature_name in self._feature_names]
+
+    def getOutputAttributeNames(self, kind: str = "kurz"):
+        del kind
+        return ["y"]
+
+    def getInputOutputAttributeNames(self, kind: str = "kurz"):
+        return self.getInputAttributeNames(kind) + self.getOutputAttributeNames(kind)
+
+    def getMutableAttributeNames(self, kind: str = "kurz"):
+        del kind
+        return [
+            self._short_names[feature_name]
+            for feature_name in self._feature_names
+            if self.attributes_kurz[self._short_names[feature_name]].mutability
+        ]
+
+    def getOneHotAttributesNames(self, kind: str = "kurz"):
+        del kind
+        return []
+
+    def getNonHotAttributesNames(self, kind: str = "kurz"):
+        del kind
+        return self.getInputAttributeNames()
+
+    def getSiblingsFor(self, attr_name_kurz: str):
+        return [attr_name_kurz]
+
+    def feature_row_to_short_dict(
+        self,
+        row: pd.Series,
+        predicted_label: int | None = None,
+    ) -> dict[str, int | float | bool]:
+        output: dict[str, int | float | bool] = {}
+        for feature_name in self._feature_names:
+            value = row[feature_name]
+            if self._feature_types[feature_name] == "numeric-real":
+                output[self._short_names[feature_name]] = float(value)
+            else:
+                output[self._short_names[feature_name]] = int(round(float(value)))
+        output["y"] = bool(predicted_label) if predicted_label is not None else False
+        return output
+
+    def short_dict_to_feature_row(self, sample: dict[str, object]) -> pd.Series:
+        row = {}
+        for short_name, feature_name in self._inverse_short_names.items():
+            value = sample.get(short_name, np.nan)
+            if value is None:
+                row[feature_name] = np.nan
+            elif self._feature_types[feature_name] == "numeric-real":
+                row[feature_name] = float(value)
+            else:
+                row[feature_name] = int(round(float(value)))
+        return pd.Series(row, index=self._feature_names)
+
+
+@register(LOCAL_DISTANCE_EVALUATION_NAME)
+class MaceNormalizedDistanceEvaluation(EvaluationObject):
+    def __init__(self, metrics: list[str] | None = None, **kwargs):
+        del kwargs
+        raw_metrics = metrics or ["l0", "l1", "linf"]
+        metric_mapping = {
+            "l0": "distance_l0",
+            "l1": "distance_l1",
+            "linf": "distance_linf",
+        }
+        resolved_metrics = []
+        for metric in raw_metrics:
+            metric_name = str(metric).lower()
+            if metric_name not in metric_mapping:
+                raise ValueError(f"Unsupported MACE normalized metric: {metric}")
+            resolved_metrics.append(metric_mapping[metric_name])
+        self._metrics = resolved_metrics
+
+    def evaluate(self, factuals, counterfactuals) -> pd.DataFrame:
+        factual_features, counterfactual_features, evaluation_mask, success_mask = (
+            resolve_evaluation_inputs(factuals, counterfactuals)
+        )
+        selected_mask = evaluation_mask & success_mask
+        results: dict[str, object] = {
+            metric_name: float("nan") for metric_name in self._metrics
+        }
+        if int(selected_mask.sum()) == 0:
+            for metric_name in self._metrics:
+                results[f"{metric_name}_pointwise"] = []
+            return pd.DataFrame([results])
+
+        wrapper = _LocalMaceDatasetWrapper.from_dataset(factuals)
+        factual_success = factual_features.loc[selected_mask.to_numpy()]
+        counterfactual_success = counterfactual_features.loc[selected_mask.to_numpy()]
+
+        distances_by_metric = {metric_name: [] for metric_name in self._metrics}
+        for row_index in factual_success.index:
+            factual_sample = wrapper.feature_row_to_short_dict(
+                factual_success.loc[row_index]
+            )
+            counterfactual_sample = wrapper.feature_row_to_short_dict(
+                counterfactual_success.loc[row_index]
+            )
+            for metric_name in self._metrics:
+                distances_by_metric[metric_name].append(
+                    float(
+                        normalizedDistance.getDistanceBetweenSamples(
+                            factual_sample,
+                            counterfactual_sample,
+                            MACE_DISTANCE_NORMS[metric_name],
+                            wrapper,
+                        )
+                    )
+                )
+
+        for metric_name, values in distances_by_metric.items():
+            results[metric_name] = float(sum(values) / len(values))
+            results[f"{metric_name}_pointwise"] = list(values)
+        return pd.DataFrame([results])
 
 
 def _load_config(config_path: Path) -> dict:
@@ -62,6 +388,14 @@ def _apply_overrides(
         f"{str(norm_type).lower()}_{epsilon:.0e}".replace("+", "")
     )
     cfg["logger"]["path"] = f"./logs/{cfg['name']}.log"
+    evaluation_names = {item.get("name") for item in cfg.get("evaluation", [])}
+    if LOCAL_DISTANCE_EVALUATION_NAME not in evaluation_names:
+        cfg.setdefault("evaluation", []).append(
+            {
+                "name": LOCAL_DISTANCE_EVALUATION_NAME,
+                "metrics": ["l0", "l1", "linf"],
+            }
+        )
     return cfg
 
 
@@ -164,8 +498,19 @@ def _build_counterfactual_dataset(factuals, counterfactual_features, desired_cla
     return output
 
 
+def _predict_label_indices(target_model, dataset_or_features) -> np.ndarray:
+    if isinstance(dataset_or_features, DatasetObject):
+        prediction = target_model.predict(
+            dataset_or_features,
+            batch_size=max(1, len(dataset_or_features)),
+        )
+    else:
+        prediction = target_model.get_prediction(dataset_or_features, proba=False)
+    return prediction.argmax(dim=1).detach().cpu().numpy()
+
+
 def _select_observable_pool(dataset, target_model, desired_class):
-    predictions = target_model.predict(dataset).argmax(dim=1).detach().cpu().numpy()
+    predictions = _predict_label_indices(target_model, dataset)
     target_index = _resolve_target_index(target_model, desired_class)
     pool_index = dataset.get(target=False).index[predictions == target_index]
     observable_pool = dataset.get(target=False).loc[pool_index].copy(deep=True)
@@ -197,15 +542,15 @@ def _violates_actionability(wrapper, factual_sample, observable_sample) -> bool:
 def _compute_mo_counterfactuals(
     experiment: Experiment, factuals, observable_pool: pd.DataFrame
 ):
-    wrapper = experiment._method._dataset_wrapper
+    wrapper = _LocalMaceDatasetWrapper.from_dataset(factuals)
     factual_features = factuals.get(target=False)
-    factual_labels = experiment._method._predict_label(factual_features)
-    observable_labels = experiment._method._predict_label(observable_pool)
+    factual_labels = _predict_label_indices(experiment._target_model, factual_features)
+    observable_labels = _predict_label_indices(experiment._target_model, observable_pool)
 
     observable_samples = []
     for row_position, row_index in enumerate(observable_pool.index):
         observable_samples.append(
-            wrapper.factual_to_short_dict(
+            wrapper.feature_row_to_short_dict(
                 observable_pool.loc[row_index],
                 int(observable_labels[row_position]),
             )
@@ -213,7 +558,7 @@ def _compute_mo_counterfactuals(
 
     rows = []
     for row_position, row_index in enumerate(factual_features.index):
-        factual_sample = wrapper.factual_to_short_dict(
+        factual_sample = wrapper.feature_row_to_short_dict(
             factual_features.loc[row_index],
             int(factual_labels[row_position]),
         )
@@ -258,58 +603,6 @@ def _compute_mo_counterfactuals(
     )
 
 
-def _compute_distance_summary(experiment: Experiment, factuals, counterfactuals):
-    (
-        factual_features,
-        counterfactual_features,
-        evaluation_mask,
-        success_mask,
-    ) = resolve_evaluation_inputs(factuals, counterfactuals)
-    selected_mask = evaluation_mask & success_mask
-
-    if int(selected_mask.sum()) == 0:
-        empty_metrics = {
-            metric_name: float("nan") for metric_name in MACE_DISTANCE_NORMS
-        }
-        empty_rows = {metric_name: [] for metric_name in MACE_DISTANCE_NORMS}
-        return empty_metrics, empty_rows
-
-    factual_success = factual_features.loc[selected_mask.to_numpy()]
-    counterfactual_success = counterfactual_features.loc[selected_mask.to_numpy()]
-
-    wrapper = experiment._method._dataset_wrapper
-    factual_labels = experiment._method._predict_label(factual_success)
-    counterfactual_labels = experiment._method._predict_label(counterfactual_success)
-
-    distances_by_metric = {metric_name: [] for metric_name in MACE_DISTANCE_NORMS}
-    for row_position, row_index in enumerate(factual_success.index):
-        factual_sample = wrapper.factual_to_short_dict(
-            factual_success.loc[row_index],
-            int(factual_labels[row_position]),
-        )
-        counterfactual_sample = wrapper.factual_to_short_dict(
-            counterfactual_success.loc[row_index],
-            int(counterfactual_labels[row_position]),
-        )
-        for metric_name, norm_type in MACE_DISTANCE_NORMS.items():
-            distances_by_metric[metric_name].append(
-                float(
-                    normalizedDistance.getDistanceBetweenSamples(
-                        factual_sample,
-                        counterfactual_sample,
-                        norm_type,
-                        wrapper,
-                    )
-                )
-            )
-
-    summary = {
-        metric_name: float(sum(values) / len(values))
-        for metric_name, values in distances_by_metric.items()
-    }
-    return summary, distances_by_metric
-
-
 def _compute_mace_vs_mo_comparison(
     norm_type: str,
     epsilon: float,
@@ -347,47 +640,83 @@ def _run_single(
     config: dict,
     num_factuals: int,
 ) -> dict:
-    experiment = Experiment(config)
-    trainset, testset = _materialize_datasets(experiment)
+    baseline_experiment = Experiment(config)
+    trainset, testset = _materialize_datasets(baseline_experiment)
 
-    experiment._target_model.fit(trainset)
+    baseline_experiment._target_model.fit(trainset)
     factuals = _select_factuals(
         testset,
-        experiment._target_model,
-        getattr(experiment._method, "_desired_class", None),
+        baseline_experiment._target_model,
+        getattr(baseline_experiment._method, "_desired_class", None),
         num_factuals,
-    )
-
-    experiment._method.fit(trainset)
-    start_time = time.perf_counter()
-    counterfactuals = experiment._method.predict(
-        factuals,
-        batch_size=max(1, len(factuals)),
-    )
-    generation_seconds = time.perf_counter() - start_time
-    metrics = _evaluate(experiment, factuals, counterfactuals)
-    mace_distances, mace_pointwise = _compute_distance_summary(
-        experiment,
-        factuals,
-        counterfactuals,
     )
 
     observable_pool = _select_observable_pool(
         testset,
-        experiment._target_model,
-        getattr(experiment._method, "_desired_class", None),
+        baseline_experiment._target_model,
+        getattr(baseline_experiment._method, "_desired_class", None),
     )
     mo_start_time = time.perf_counter()
     mo_counterfactuals = _compute_mo_counterfactuals(
-        experiment, factuals, observable_pool
+        baseline_experiment, factuals, observable_pool
     )
     mo_generation_seconds = time.perf_counter() - mo_start_time
-    mo_metrics_df = _evaluate(experiment, factuals, mo_counterfactuals)
-    mo_distances, mo_pointwise = _compute_distance_summary(
-        experiment,
-        factuals,
-        mo_counterfactuals,
+    mo_metrics_df = _evaluate(baseline_experiment, factuals, mo_counterfactuals)
+    mo_metrics_raw = {
+        key: _to_builtin_scalar(value)
+        for key, value in mo_metrics_df.iloc[0].to_dict().items()
+    }
+    mo_metric_row = {
+        key: value
+        for key, value in mo_metrics_raw.items()
+        if not str(key).endswith("_pointwise")
+    }
+    mo_pointwise = {
+        key.replace("_pointwise", ""): list(value)
+        for key, value in mo_metrics_raw.items()
+        if str(key).endswith("_pointwise")
+    }
+    mo_distances = {
+        key: float(mo_metric_row[key])
+        for key in MACE_DISTANCE_NORMS
+    }
+
+    experiment_cfg = deepcopy(config)
+    preprocess_cfg = [
+        step
+        for step in experiment_cfg.get("preprocess", [])
+        if step.get("name", "").lower() != "finalize"
+    ]
+    preprocess_cfg.append(
+        {
+            "name": LOCAL_SELECT_PREPROCESS_NAME,
+            "indices": factuals.get(target=False).index.tolist(),
+        }
     )
+    preprocess_cfg.append({"name": "finalize"})
+    experiment_cfg["preprocess"] = preprocess_cfg
+    experiment = Experiment(experiment_cfg)
+    start_time = time.perf_counter()
+    metrics = experiment.run()
+    generation_seconds = time.perf_counter() - start_time
+    metric_row_raw = {
+        key: _to_builtin_scalar(value)
+        for key, value in metrics.iloc[0].to_dict().items()
+    }
+    metric_row = {
+        key: value
+        for key, value in metric_row_raw.items()
+        if not str(key).endswith("_pointwise")
+    }
+    mace_pointwise = {
+        key.replace("_pointwise", ""): list(value)
+        for key, value in metric_row_raw.items()
+        if str(key).endswith("_pointwise")
+    }
+    mace_distances = {
+        key: float(metric_row[key])
+        for key in MACE_DISTANCE_NORMS
+    }
     comparison = _compute_mace_vs_mo_comparison(
         norm_type=str(config["method"]["norm_type"]),
         epsilon=float(config["method"]["epsilon"]),
@@ -396,18 +725,6 @@ def _run_single(
         mace_pointwise=mace_pointwise,
         mo_pointwise=mo_pointwise,
     )
-
-    metric_row = {
-        key: _to_builtin_scalar(value)
-        for key, value in metrics.iloc[0].to_dict().items()
-    }
-    metric_row.update(mace_distances)
-
-    mo_metric_row = {
-        key: _to_builtin_scalar(value)
-        for key, value in mo_metrics_df.iloc[0].to_dict().items()
-    }
-    mo_metric_row.update(mo_distances)
 
     return {
         "config_name": config["name"],

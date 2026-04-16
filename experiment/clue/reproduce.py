@@ -7,7 +7,7 @@ from pathlib import Path
 import matplotlib
 import numpy as np
 import torch
-from sklearn.model_selection import train_test_split
+import yaml
 
 matplotlib.use("Agg")
 
@@ -72,14 +72,8 @@ from VAE.fc_gauss_cat import VAE_gauss_cat_net  # noqa: E402
 from VAEAC.fc_gauss_cat import VAEAC_gauss_cat_net  # noqa: E402
 from VAEAC.under_net import under_VAEAC  # noqa: E402
 
-from dataset.compas_clue.compas_clue import CompasClueDataset  # noqa: E402
+from experiment import Experiment  # noqa: E402
 from model.mlp_bayesian.mlp_bayesian import MlpBayesianModel  # noqa: E402
-from preprocess.common import (  # noqa: E402
-    EncodePreProcess,
-    FinalizePreProcess,
-    ReorderPreProcess,
-    ScalePreProcess,
-)
 
 OFFICIAL_ORDER = [
     "age_cat_cat_25 - 45",
@@ -124,6 +118,9 @@ PAPER_TOLERANCES = {
     "table2_epistemic": 0.01,
     "table2_aleatoric": 0.05,
 }
+DEFAULT_SMOKETEST_CONFIG_PATH = (
+    PROJECT_ROOT / "experiment" / "clue" / "compas_mlp_bayesian_clue_smoketest.yaml"
+)
 DEFAULT_BNN_ART_PATH = (
     PROJECT_ROOT
     / "reference/clueweights/notebooks/saves/fc_BNN_NEW_ART_compas_models/state_dicts.pkl"
@@ -166,35 +163,33 @@ def _resolve_device() -> str:
     return "cuda" if torch.cuda.is_available() else "cpu"
 
 
+def _load_smoketest_config(config_path: Path = DEFAULT_SMOKETEST_CONFIG_PATH) -> dict:
+    with config_path.open("r", encoding="utf-8") as file:
+        config = yaml.safe_load(file)
+    if not isinstance(config, dict):
+        raise ValueError("CLUE smoketest config must parse to a dictionary")
+    return config
+
+
+def _materialize_datasets(experiment: Experiment):
+    datasets = [experiment._raw_dataset]
+    for preprocess_step in experiment._preprocess:
+        next_datasets = []
+        for current_dataset in datasets:
+            transformed = preprocess_step.transform(current_dataset)
+            if isinstance(transformed, tuple):
+                next_datasets.extend(list(transformed))
+            else:
+                next_datasets.append(transformed)
+        datasets = next_datasets
+    return experiment._resolve_train_test(datasets)
+
+
 def _prepare_compas_arrays(seed: int = 42):
-    dataset = CompasClueDataset()
-    raw_df = dataset.snapshot()
-    train_df, test_df = train_test_split(
-        raw_df,
-        test_size=0.1,
-        random_state=seed,
-        shuffle=True,
-    )
-    trainset = dataset
-    testset = dataset.clone()
-    trainset.update("trainset", True, df=train_df.copy(deep=True))
-    testset.update("testset", True, df=test_df.copy(deep=True))
-
-    scale = ScalePreProcess(seed=seed, scaling="standardize", range=True, refset=trainset)
-    trainset = scale.transform(trainset)
-    testset = scale.transform(testset)
-
-    encode = EncodePreProcess(seed=seed, encoding="onehot")
-    trainset = encode.transform(trainset)
-    testset = encode.transform(testset)
-
-    reorder = ReorderPreProcess(seed=seed, order=OFFICIAL_ORDER)
-    trainset = reorder.transform(trainset)
-    testset = reorder.transform(testset)
-
-    finalize = FinalizePreProcess(seed=seed)
-    trainset = finalize.transform(trainset)
-    testset = finalize.transform(testset)
+    del seed
+    config = _load_smoketest_config()
+    experiment = Experiment(config)
+    trainset, testset = _materialize_datasets(experiment)
 
     x_train = trainset.get(target=False).to_numpy(dtype="float32")
     x_test = testset.get(target=False).to_numpy(dtype="float32")
