@@ -1,35 +1,34 @@
-# Benchmark Live Site
+# Benchmark Live Site (CSV-Only)
 
-This app has two modes:
+This dashboard ranks recourse methods from precomputed experiment rows in:
 
-1. Static mode (GitHub Pages): rank/filter existing CSV results.
-2. Server mode (Python backend): run new experiments from UI and append fresh results.
+- `data/benchmark_results.csv`
 
-## Files
-- `index.html`, `styles.css`, `app.js`: frontend
-- `server.py`: backend API + static file server
-- `data/benchmark_results.csv`: baseline results
-- `data/runtime_results.csv`: generated in server mode
+The page does not run experiments. It only filters and ranks rows already in the CSV.
 
-## Server Mode (Recommended)
+## Run Locally
 From repo root:
 
 ```powershell
-venv12\Scripts\python.exe webapp\benchmark-live\server.py --port 8000
+venv12\Scripts\python.exe -m http.server 8000 --directory webapp\benchmark-live
 ```
 
 Open:
 
 - `http://127.0.0.1:8000/`
 
-API endpoints used by UI:
-- `GET /api/options`
-- `GET /api/results`
-- `POST /api/run-selection`
-- `POST /api/run-config`
-- `GET /api/jobs/<job_id>`
+## Expected CSV Columns
+Required filter columns:
+- `dataset`
+- `model`
+- `method`
 
-## Static Mode (GitHub Pages)
-GitHub Pages can host the dashboard UI, but it cannot execute Python experiments.
+Metrics used by ranking:
+- `validity` (maximize)
+- `distance_l1` (minimize)
+- `distance_l0` (minimize)
+- `ynn` (maximize)
+- `runtime_seconds` (minimize)
 
-In static mode the page falls back to `data/benchmark_results.csv` only.
+Optional:
+- `status` (if present, only rows with `success` are used)

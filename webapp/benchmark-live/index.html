@@ -9,73 +9,109 @@
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="styles.css" />
   <script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/js-yaml@4.1.0/dist/js-yaml.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <main class="page">
-    <header class="hero">
+    <header class="hero panel">
       <p class="eyebrow">Recourse Benchmark</p>
-      <h1>Method Selector Dashboard</h1>
+      <h1>Interactive Benchmark Explorer</h1>
       <p class="subtitle">
-        Choose dataset, model, metrics, and constraints to rank methods from available and newly-run experiments.
+        Configure your scenario, then inspect the benchmark with visual analytics and a detailed ranking table.
       </p>
-      <p id="modeHint" class="hint"></p>
+      <div class="heroMeta">
+        <span class="chip">Data source: <code>data/benchmark_results.csv</code></span>
+        <span class="chip" id="selectionHeadline">Choose a dataset and model to begin.</span>
+      </div>
     </header>
 
-    <section class="panel controls">
-      <div class="grid two">
-        <label>
-          Dataset
-          <select id="datasetSelect"></select>
-        </label>
-
-        <label>
-          Model
-          <select id="modelSelect"></select>
-        </label>
+    <section class="panel selectorStudio">
+      <div class="studioHeader">
+        <h2>Scenario Studio</h2>
+        <div id="selectionPills" class="selectionPills"></div>
       </div>
 
-      <label>
-        Methods (optional, multi-select)
-        <select id="methodSelect" multiple size="6"></select>
-      </label>
+      <div class="scopeMixer">
+        <article class="scopeCard">
+          <p class="scopeLabel">Dataset</p>
+          <div id="datasetRail" class="optionRail"></div>
+        </article>
 
-      <h2>Run New Experiments</h2>
-      <p class="small">When backend is available, this runs missing settings and appends fresh results.</p>
-
-      <div id="runMetricEditor" class="metricEditor"></div>
-
-      <div class="actions">
-        <button id="runSelectionBtn" type="button">Run Selection</button>
+        <article class="scopeCard">
+          <p class="scopeLabel">Model</p>
+          <div id="modelRail" class="optionRail"></div>
+        </article>
       </div>
 
-      <div class="uploadRow">
-        <label for="configUpload" class="uploadLabel">Upload YAML Config</label>
-        <input id="configUpload" type="file" accept=".yaml,.yml" />
-        <button id="runConfigBtn" type="button" class="ghost">Run Uploaded Config</button>
-        <span id="configStatus" class="configStatus">No config uploaded.</span>
+      <div class="chooserGrid">
+        <article class="chooserCard">
+          <div class="cardHeader">
+            <h3>Methods</h3>
+            <span id="methodSelectedCount" class="countBadge">All methods</span>
+          </div>
+
+          <div class="modeSwitch">
+            <button id="modeAllMethodsBtn" type="button" class="modeBtn">Use All</button>
+            <button id="modeCustomMethodsBtn" type="button" class="modeBtn">Custom</button>
+          </div>
+
+          <label class="inlineLabel" for="methodSearch">Search</label>
+          <input id="methodSearch" type="search" placeholder="Filter methods..." />
+
+          <div class="actions compact">
+            <button id="selectAllMethodsBtn" type="button" class="ghost">Select All</button>
+            <button id="clearMethodsBtn" type="button" class="ghost">Clear</button>
+          </div>
+
+          <div id="methodPalette" class="tokenPalette"></div>
+        </article>
+
+        <article class="chooserCard">
+          <div class="cardHeader">
+            <h3>Metrics</h3>
+            <span id="metricSelectedCount" class="countBadge">0 selected</span>
+          </div>
+
+          <div class="presetRow">
+            <button class="ghost presetBtn" type="button" data-preset="balanced">Balanced</button>
+            <button class="ghost presetBtn" type="button" data-preset="quality">Quality</button>
+            <button class="ghost presetBtn" type="button" data-preset="speed">Speed</button>
+          </div>
+
+          <div class="actions compact">
+            <button id="selectAllMetricsBtn" type="button" class="ghost">Select All</button>
+            <button id="clearMetricsBtn" type="button" class="ghost">Clear</button>
+          </div>
+
+          <div id="metricPalette" class="tokenPalette metricPalette"></div>
+        </article>
       </div>
 
-      <div id="jobStatus" class="jobStatus"></div>
+      <div class="actions mainActions">
+        <button id="rankBtn" type="button">Show Benchmark</button>
+        <button id="resetBtn" type="button" class="ghost">Reset</button>
+        <button id="reloadBtn" type="button" class="ghost">Reload CSV</button>
+      </div>
 
-      <h2>Ranking Metrics & Constraints</h2>
-      <p class="small">Use checkbox to include metric in ranking. Add optional min/max constraints.</p>
-      <div id="metricEditor" class="metricEditor"></div>
+      <div id="statusMessage" class="statusBanner"></div>
+    </section>
 
-      <div class="actions">
-        <button id="rankBtn" type="button">Rank Methods</button>
-        <button id="resetBtn" type="button" class="ghost">Reset Filters</button>
-        <button id="reloadBtn" type="button" class="ghost">Reload Results</button>
+    <section id="visualSection" class="panel hidden">
+      <h2>Benchmark Visuals</h2>
+      <div class="vizGrid">
+        <article class="vizCard">
+          <h3>Tradeoff Map</h3>
+          <div id="tradeoffPlot" class="tradeoffPlot"></div>
+        </article>
+        <article class="vizCard">
+          <h3>Top Method Profiles (Radar)</h3>
+          <div id="radarPlot" class="radarPlot"></div>
+        </article>
       </div>
     </section>
 
-    <section class="panel">
-      <h2>Top Methods</h2>
-      <div id="topCards" class="cards"></div>
-    </section>
-
-    <section class="panel">
-      <h2>Ranking Table</h2>
+    <section id="tableSection" class="panel hidden">
+      <h2>Detailed Ranking</h2>
       <div id="summary" class="summary"></div>
       <div class="tableWrap">
         <table id="resultTable">
@@ -89,3 +125,11 @@
   <script src="app.js"></script>
 </body>
 </html>
+
+
+
+
+
+
+
+

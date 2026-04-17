@@ -1,0 +1,54 @@
+name: bench_breast_cancer_mlp_wachter
+logger:
+  level: INFO
+  path: ./logs/benchmark_batch_2x2x5/bench_breast_cancer_mlp_wachter.log
+caching:
+  path: ./cache/benchmark_batch_2x2x5/
+dataset:
+  name: breast_cancer
+preprocess:
+- name: scale
+  seed: 42
+  scaling: standardize
+  range: true
+- name: split
+  seed: 42
+  split: 0.2
+  sample: 30
+model:
+  name: mlp
+  seed: 42
+  device: cpu
+  epochs: 120
+  learning_rate: 0.005
+  batch_size: 32
+  layers:
+  - 64
+  - 32
+  optimizer: adam
+  criterion: cross_entropy
+  output_activation: softmax
+method:
+  name: wachter
+  seed: 42
+  device: cpu
+  desired_class: 1
+  lr: 0.01
+  lambda_: 0.01
+  n_iter: 300
+  t_max_min: 0.1
+  norm: 1
+  clamp: true
+  loss_type: BCE
+evaluation:
+- name: validity
+- name: distance
+  metrics:
+  - l0
+  - l1
+  - l2
+  - linf
+- name: ynn
+  k: 5
+- name: runtime
+
