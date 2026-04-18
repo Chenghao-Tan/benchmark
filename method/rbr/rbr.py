@@ -22,6 +22,28 @@ from utils.registry import register
 from utils.seed import seed_context
 
 
+def _compute_max_l2_distance(
+    values: np.ndarray,
+    device: str,
+    chunk_size: int = 256,
+) -> float:
+    array = np.asarray(values, dtype=np.float32)
+    if array.ndim != 2:
+        raise ValueError("RBR max-distance computation requires a 2D array")
+    if array.shape[0] < 2:
+        return 0.0
+
+    tensor = torch.tensor(array, dtype=torch.float32, device=device)
+    max_distance = 0.0
+    for start in range(0, tensor.shape[0], chunk_size):
+        batch = tensor[start : start + chunk_size]
+        distance = torch.cdist(batch, tensor, p=2)
+        batch_max = float(distance.max().item())
+        if batch_max > max_distance:
+            max_distance = batch_max
+    return max_distance
+
+
 @register("rbr")
 class RbrMethod(MethodObject):
     def __init__(
@@ -117,6 +139,10 @@ class RbrMethod(MethodObject):
                 trainset,
                 self._feature_names,
             )
+            self._train_max_distance = _compute_max_l2_distance(
+                train_data,
+                device=self._device,
+            )
 
             self._class_to_index = self._target_model.get_class_to_index()
             if len(self._class_to_index) != 2:
@@ -162,6 +188,7 @@ class RbrMethod(MethodObject):
                 candidate = robust_bayesian_recourse(
                     raw_model=self._adapter,
                     x0=factual,
+                    y_target=target_index,
                     cat_features_indices=(
                         self._onehot_feature_indices if self._enforce_encoding else None
                     ),
@@ -169,7 +196,7 @@ class RbrMethod(MethodObject):
                     train_t=self._train_t,
                     train_label=self._train_label,
                     num_samples=self._num_samples,
-                    perturb_radius=self._perturb_radius,
+                    perturb_radius=self._perturb_radius * self._train_max_distance,
                     delta_plus=self._delta_plus,
                     sigma=self._sigma,
                     epsilon_op=self._epsilon_op,
