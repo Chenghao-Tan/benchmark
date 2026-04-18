@@ -1,0 +1,50 @@
+name: default
+base_config: base.yml
+output_csv: ./benchmark/results/default_results.csv
+
+datasets:
+  - adult
+  # - adult_cogs
+  # - boston_housing
+  # - breast_cancer
+  # - compas
+  - compas_carla
+  # - compas_clue
+  # - credit
+  # - credit_cchvae
+  # - diabetes
+  - german
+  # - german_roar
+  # - german_sns
+  # - news_popularity
+  # - synthetic_face
+
+models:
+  - linear
+  - mlp
+  - mlp_bayesian
+  - randomforest
+  - sklearn_logistic_regression
+
+methods:
+  - apas
+  - arg_ensembling
+  # - cchvae
+  # - cfrl
+  # - cfvae
+  - clue
+  - cogs
+  - cols
+  - cvas_proj
+  # - dice
+  - diverse_dist
+  - face
+  - gs
+  # - larr
+  - mace
+  - probe
+  - proplace
+  - rbr
+  - roar
+  - sns
+  - trex
