@@ -13,4 +13,4 @@ method:
   enforce_encoding: false
 
 compatibility:
-  allowed_models: [linear, mlp, randomforest, sklearn_logistic_regression]
+  allowed_models: [linear, mlp, sklearn_logistic_regression]

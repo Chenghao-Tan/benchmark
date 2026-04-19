@@ -11,6 +11,8 @@ method:
   max_iter: 200
   clamp: false
   enforce_encoding: false
+  show_progress: true
+  progress_desc: rbr-cf
 
 compatibility:
-  allowed_models: [linear, mlp, randomforest]
+  allowed_models: [linear, mlp]

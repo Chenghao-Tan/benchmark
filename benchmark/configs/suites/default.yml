@@ -3,6 +3,7 @@ base_config: base.yml
 output_csv: ./benchmark/results/default_results.csv
 
 datasets:
+  - german
   - adult
   # - adult_cogs
   # - boston_housing
@@ -13,7 +14,6 @@ datasets:
   # - credit
   # - credit_cchvae
   # - diabetes
-  - german
   # - german_roar
   # - german_sns
   # - news_popularity
@@ -23,24 +23,24 @@ models:
   - linear
   - mlp
   - mlp_bayesian
-  - randomforest
-  - sklearn_logistic_regression
+  # - randomforest    # do forest after main run is done since it seems to take quite some time with some methods.
+  # - sklearn_logistic_regression
 
 methods:
   - apas
   - arg_ensembling
-  # - cchvae
-  # - cfrl
-  # - cfvae
+  - cchvae
+  - cfrl
+  - cfvae
   - clue
   - cogs
   - cols
   - cvas_proj
-  # - dice
+  - dice
   - diverse_dist
   - face
   - gs
-  # - larr
+  - larr
   - mace
   - probe
   - proplace
