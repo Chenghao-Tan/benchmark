@@ -3,6 +3,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import torch
+from tqdm.auto import tqdm
 
 from dataset.dataset_object import DatasetObject
 from method.method_object import MethodObject
@@ -62,6 +63,8 @@ class RbrMethod(MethodObject):
         clamp: bool = False,
         enforce_encoding: bool = False,
         random_state: int = 42,
+        show_progress: bool = False,
+        progress_desc: str | None = None,
         verbose: bool = False,
         **kwargs,
     ):
@@ -83,6 +86,10 @@ class RbrMethod(MethodObject):
         self._clamp = bool(clamp)
         self._enforce_encoding = bool(enforce_encoding)
         self._random_state = int(random_state)
+        self._show_progress = bool(show_progress)
+        self._progress_desc = (
+            str(progress_desc) if progress_desc is not None else "rbr-cf"
+        )
         self._verbose = bool(verbose)
 
         if self._device != self._target_model._device:
@@ -176,7 +183,15 @@ class RbrMethod(MethodObject):
 
         rows: list[pd.Series] = []
         with seed_context(self._seed):
-            for row_index, (_, row) in enumerate(factuals.iterrows()):
+            factual_iterator = tqdm(
+                factuals.iterrows(),
+                total=factuals.shape[0],
+                desc=self._progress_desc,
+                unit="cf",
+                leave=False,
+                disable=not self._show_progress,
+            )
+            for row_index, (_, row) in enumerate(factual_iterator):
                 factual = row.to_numpy(dtype="float32", copy=True)
                 original_index = int(original_prediction[row_index])
                 target_index = int(target_indices[row_index])
