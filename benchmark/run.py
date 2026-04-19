@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import logging
 import sys
 import time
@@ -25,6 +27,11 @@ DEFAULT_PREDICTION_BATCH_SIZE = 512
 DEFAULT_METHOD_BATCH_SIZE = 20
 DEFAULT_WRITE_MODE = "replace-overlaps"
 VALID_WRITE_MODES = {"append", "replace-overlaps", "rewrite-all"}
+SUPPORTED_MODEL_CACHE_EXTENSIONS = {
+    "linear": "pt",
+    "mlp": "pt",
+    "mlp_bayesian": "pkl",
+}
 
 
 def _load_yaml_dict(path: Path) -> dict:
@@ -166,11 +173,16 @@ def _resolve_benchmark_cfg(config: dict) -> dict:
     benchmark_cfg.setdefault("desired_class", 1)
     benchmark_cfg.setdefault("sample_target", 50)
     benchmark_cfg.setdefault("min_factuals", 25)
+    benchmark_cfg.setdefault("allow_partial_factuals", True)
     benchmark_cfg.setdefault("sample_seed", 0)
     benchmark_cfg.setdefault("factual_filter", "prediction_not_equal_desired_class")
     benchmark_cfg.setdefault("prediction_batch_size", DEFAULT_PREDICTION_BATCH_SIZE)
     benchmark_cfg.setdefault("method_batch_size", DEFAULT_METHOD_BATCH_SIZE)
     benchmark_cfg.setdefault("continue_on_error", True)
+    model_cache_cfg = deepcopy(benchmark_cfg.get("model_cache", {}))
+    model_cache_cfg.setdefault("enabled", True)
+    model_cache_cfg.setdefault("namespace", "benchmark")
+    benchmark_cfg["model_cache"] = model_cache_cfg
     return benchmark_cfg
 
 
@@ -179,6 +191,74 @@ def _resolve_method_benchmark_cfg(config: dict) -> dict:
     method_benchmark_cfg.setdefault("use_dataset_desired_class", True)
     method_benchmark_cfg.setdefault("factual_filter", None)
     return method_benchmark_cfg
+
+
+def _remove_nested_keys(payload: object, drop_keys: set[str]) -> object:
+    if isinstance(payload, dict):
+        return {
+            key: _remove_nested_keys(value, drop_keys)
+            for key, value in payload.items()
+            if key not in drop_keys
+        }
+    if isinstance(payload, list):
+        return [_remove_nested_keys(item, drop_keys) for item in payload]
+    return payload
+
+
+def _benchmark_model_cache_payload(config: dict) -> dict:
+    model_payload = _remove_nested_keys(
+        deepcopy(config["model"]),
+        {"device", "pretrained_path", "save_name"},
+    )
+    return {
+        "dataset": deepcopy(config["dataset"]),
+        "preprocess": deepcopy(config.get("preprocess", [])),
+        "model": model_payload,
+    }
+
+
+def _benchmark_model_cache_save_name(config: dict) -> str | None:
+    benchmark_cfg = config.get("benchmark", {})
+    model_cache_cfg = benchmark_cfg.get("model_cache", {})
+    if not bool(model_cache_cfg.get("enabled", True)):
+        return None
+
+    model_name = str(config["model"]["name"])
+    if model_name not in SUPPORTED_MODEL_CACHE_EXTENSIONS:
+        return None
+
+    explicit_pretrained = config["model"].get("pretrained_path")
+    if explicit_pretrained:
+        return None
+
+    explicit_save_name = config["model"].get("save_name")
+    if explicit_save_name:
+        return str(explicit_save_name)
+
+    payload = _benchmark_model_cache_payload(config)
+    payload_bytes = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    digest = hashlib.sha256(payload_bytes).hexdigest()[:16]
+    namespace = str(model_cache_cfg.get("namespace", "benchmark"))
+    return f"{namespace}__{model_name}__{digest}"
+
+
+def _apply_model_cache_config(run_cfg: dict) -> None:
+    save_name = _benchmark_model_cache_save_name(run_cfg)
+    if save_name is None:
+        return
+
+    model_name = str(run_cfg["model"]["name"])
+    extension = SUPPORTED_MODEL_CACHE_EXTENSIONS[model_name]
+    cache_root = Path(run_cfg.get("caching", {}).get("path", "./cache/")) / "models"
+
+    run_cfg["model"]["save_name"] = save_name
+    run_cfg["model"]["pretrained_path"] = (
+        cache_root / f"{save_name}.{extension}"
+    ).as_posix()
 
 
 def _is_compatible(dataset_name: str, model_name: str, method_cfg: dict) -> bool:
@@ -225,6 +305,7 @@ def _build_run_config(
     )
     run_cfg["model"]["device"] = resolved_device
     run_cfg["method"]["device"] = resolved_device
+    _apply_model_cache_config(run_cfg)
     return run_cfg
 
 
@@ -324,6 +405,7 @@ def _sample_factuals(testset, target_model, benchmark_cfg: dict) -> tuple[object
     eligible_count = int(eligible_indices.shape[0])
     sample_target = int(benchmark_cfg["sample_target"])
     min_factuals = int(benchmark_cfg["min_factuals"])
+    allow_partial_factuals = bool(benchmark_cfg.get("allow_partial_factuals", True))
     sampled_count = min(sample_target, eligible_count)
 
     metadata = {
@@ -332,7 +414,11 @@ def _sample_factuals(testset, target_model, benchmark_cfg: dict) -> tuple[object
         "actual_factual_count": sampled_count,
     }
 
-    if eligible_count < min_factuals:
+    if eligible_count == 0:
+        metadata["actual_factual_count"] = 0
+        return None, metadata
+
+    if eligible_count < min_factuals and not allow_partial_factuals:
         metadata["actual_factual_count"] = 0
         return None, metadata
 
@@ -461,6 +547,14 @@ def _execute_run(run_id: str, config: dict) -> list[dict[str, object]]:
         trainset, testset = _materialize_train_test(experiment)
         logger.info("Resolved train/test sizes: %d / %d", len(trainset), len(testset))
 
+        model_pretrained_path = experiment.get_config()["model"].get("pretrained_path")
+        if model_pretrained_path:
+            model_cache_path = Path(str(model_pretrained_path))
+            if model_cache_path.exists():
+                logger.info("Using cached target model from %s", model_cache_path)
+            else:
+                logger.info("Target model cache miss; will train and save to %s", model_cache_path)
+
         experiment._target_model.fit(trainset)
         experiment._method.fit(trainset)
 
@@ -471,10 +565,8 @@ def _execute_run(run_id: str, config: dict) -> list[dict[str, object]]:
         )
         if factuals is None:
             logger.warning(
-                "Skipping run %s due to insufficient eligible factuals (%d < %d)",
+                "Skipping run %s due to zero eligible factuals",
                 run_id,
-                sampling_metadata["eligible_factual_count"],
-                int(config["benchmark"]["min_factuals"]),
             )
             duration = round(time.monotonic() - start_time, 6)
             return [
@@ -486,6 +578,13 @@ def _execute_run(run_id: str, config: dict) -> list[dict[str, object]]:
                     run_duration_seconds=duration,
                 )
             ]
+        if sampling_metadata["eligible_factual_count"] < int(config["benchmark"]["min_factuals"]):
+            logger.warning(
+                "Proceeding with partial factual set for run %s (%d < %d)",
+                run_id,
+                sampling_metadata["eligible_factual_count"],
+                int(config["benchmark"]["min_factuals"]),
+            )
 
         method_batch_size = int(config["benchmark"]["method_batch_size"])
         counterfactuals = experiment._method.predict(factuals, batch_size=method_batch_size)
