@@ -19,13 +19,203 @@ from scipy.spatial.distance import cdist, euclidean
 from sklearn.metrics import accuracy_score, f1_score
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 from tqdm import tqdm
 
 import dataset  # noqa: F401
 import method  # noqa: F401
 import model  # noqa: F401
 import preprocess  # noqa: F401
+from dataset.dataset_object import DatasetObject
+from model.model_object import ModelObject, process_nan
+from model.model_utils import build_optimizer, logits_to_prediction, resolve_device
 from utils.registry import get_registry
+from utils.seed import seed_context
+
+
+class _CemspReferenceMlp(ModelObject):
+    def __init__(
+        self,
+        seed: int | None = None,
+        device: str = "cpu",
+        epochs: int = 100,
+        learning_rate: float = 0.001,
+        batch_size: int = 32,
+        layers: list[int] | None = None,
+        optimizer: str = "adam",
+        criterion: str = "cross_entropy",
+        output_activation: str = "softmax",
+        pretrained_path: str | None = None,
+        save_name: str | None = None,
+        **kwargs,
+    ):
+        self._model: torch.nn.Module
+        self._seed = seed
+        self._device = resolve_device(device)
+        self._need_grad = True
+        self._is_trained = False
+        self._epochs = int(epochs)
+        self._learning_rate = float(learning_rate)
+        self._batch_size = int(batch_size)
+        self._layers = list(layers or [30, 10])
+        self._optimizer_name = str(optimizer)
+        self._criterion_name = str(criterion).lower()
+        self._output_activation_name = str(output_activation).lower()
+        self._pretrained_path = pretrained_path
+        self._save_name = save_name
+        self._output_dim: int | None = None
+
+        if self._batch_size < 1:
+            raise ValueError("batch_size must be >= 1")
+        if self._criterion_name not in {"cross_entropy", "bce"}:
+            raise ValueError(
+                "_CemspReferenceMlp supports criterion='cross_entropy' or 'bce' only"
+            )
+        if self._output_activation_name not in {"softmax", "sigmoid"}:
+            raise ValueError(
+                "_CemspReferenceMlp output_activation must be 'softmax' or 'sigmoid'"
+            )
+        if self._output_activation_name == "sigmoid" and self._criterion_name != "bce":
+            raise ValueError(
+                "_CemspReferenceMlp output_activation='sigmoid' requires criterion='bce'"
+            )
+        if self._output_activation_name == "softmax" and self._criterion_name == "bce":
+            raise ValueError(
+                "_CemspReferenceMlp output_activation='softmax' is incompatible with criterion='bce'"
+            )
+
+    def _build_network(self, input_dim: int, output_dim: int) -> torch.nn.Module:
+        blocks: list[torch.nn.Module] = []
+        current_dim = input_dim
+        for hidden_dim in self._layers:
+            blocks.append(torch.nn.Linear(current_dim, hidden_dim))
+            blocks.append(torch.nn.ReLU())
+            current_dim = hidden_dim
+        blocks.append(torch.nn.Linear(current_dim, output_dim))
+        return torch.nn.Sequential(*blocks)
+
+    def fit(self, trainset: DatasetObject | None):
+        if trainset is None:
+            raise ValueError("trainset is required for _CemspReferenceMlp.fit()")
+
+        with seed_context(self._seed):
+            X, labels, output_dim = self.extract_training_data(trainset)
+            if self._output_activation_name == "sigmoid":
+                if len(self.get_class_to_index()) != 2:
+                    raise ValueError(
+                        "_CemspReferenceMlp output_activation='sigmoid' supports binary classification only"
+                    )
+                network_output_dim = 1
+            else:
+                network_output_dim = output_dim
+
+            input_dim = X.shape[1]
+            self._output_dim = network_output_dim
+            self._model = self._build_network(input_dim, network_output_dim).to(
+                self._device
+            )
+
+            if self._pretrained_path is not None and Path(self._pretrained_path).exists():
+                state_dict = torch.load(
+                    self._pretrained_path,
+                    map_location=self._device,
+                )
+                self._model.load_state_dict(state_dict)
+                self._model.eval()
+                self._is_trained = True
+                return
+
+            optimizer = build_optimizer(
+                self._optimizer_name,
+                self._model.parameters(),
+                self._learning_rate,
+            )
+            X_np = X.to_numpy(dtype="float32")
+            y_np = labels.detach().cpu().numpy().astype(np.int64, copy=False)
+
+            train_dataset = TensorDataset(
+                torch.from_numpy(X_np),
+                torch.from_numpy(y_np),
+            )
+            class_counts = np.bincount(y_np)
+            if np.any(class_counts == 0):
+                raise ValueError(
+                    "_CemspReferenceMlp weighted sampling requires every class to appear at least once"
+                )
+            class_weights = 1.0 / class_counts
+            sample_weights = class_weights[y_np]
+            sampler = WeightedRandomSampler(
+                weights=torch.tensor(sample_weights, dtype=torch.float32),
+                num_samples=X_np.shape[0],
+                replacement=True,
+            )
+            train_loader = DataLoader(
+                train_dataset,
+                sampler=sampler,
+                shuffle=False,
+                batch_size=self._batch_size,
+            )
+
+            if self._criterion_name == "cross_entropy":
+                criterion = torch.nn.CrossEntropyLoss()
+            else:
+                criterion = torch.nn.BCELoss()
+            criterion = criterion.to(self._device)
+
+            self._model.train()
+            for _ in tqdm(range(self._epochs), desc="cemsp-reference-mlp-fit", leave=False):
+                for batch_X, batch_y in train_loader:
+                    batch_X = batch_X.to(self._device)
+                    if self._criterion_name == "cross_entropy":
+                        target = batch_y.to(self._device)
+                    else:
+                        target = batch_y.to(self._device).to(dtype=torch.float32).unsqueeze(1)
+
+                    optimizer.zero_grad()
+                    logits = self._model(batch_X)
+                    loss_input = (
+                        torch.sigmoid(logits)
+                        if self._criterion_name == "bce"
+                        else logits
+                    )
+                    loss = criterion(loss_input, target)
+                    loss.backward()
+                    optimizer.step()
+
+            self._model.eval()
+            self._is_trained = True
+
+    @process_nan()
+    def get_prediction(self, X: pd.DataFrame, proba: bool = True) -> torch.Tensor:
+        if not self._is_trained or self._model is None:
+            raise RuntimeError("Target model is not trained")
+        with seed_context(self._seed):
+            self._model.eval()
+            X_tensor = torch.tensor(
+                X.to_numpy(dtype="float32"),
+                dtype=torch.float32,
+                device=self._device,
+            )
+            with torch.no_grad():
+                logits = self._model(X_tensor)
+                prediction = logits_to_prediction(
+                    logits,
+                    proba=proba,
+                    output_activation=self._output_activation_name,
+                )
+            return prediction.detach().cpu()
+
+    def forward(self, X: torch.Tensor) -> torch.Tensor:
+        if not self._is_trained or self._model is None:
+            raise RuntimeError("Target model is not trained")
+        with seed_context(self._seed):
+            self._model.eval()
+            logits = self._model(X.to(self._device))
+            if self._output_activation_name == "sigmoid":
+                if logits.ndim == 1:
+                    logits = logits.unsqueeze(1)
+                return torch.cat([-logits, logits], dim=1)
+            return logits
 
 
 def _load_config(config_path: Path) -> dict:
@@ -53,9 +243,13 @@ def _build_dataset(config: dict):
 def _build_model(config: dict, seed: int):
     model_cfg = deepcopy(config["model"])
     model_name = model_cfg.pop("name")
+    if str(model_name).lower() != "mlp":
+        raise ValueError(
+            "CEMSP reproduction currently expects model.name='mlp' and uses a local reference MLP implementation"
+        )
     model_cfg["seed"] = int(seed)
-    model_class = get_registry("model")[model_name]
-    return model_class(**model_cfg)
+    model_cfg.pop("sampling", None)
+    return _CemspReferenceMlp(**model_cfg)
 
 
 def _build_method(

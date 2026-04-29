@@ -27,9 +27,26 @@ def ensure_supported_target_model(
     if isinstance(target_model, tuple(supported_types)):
         return
 
+    if isinstance(target_model, ModelObject):
+        required_attributes = [
+            "_device",
+            "get_prediction",
+            "get_class_to_index",
+            "predict",
+            "predict_proba",
+        ]
+        missing_attributes = [
+            attribute
+            for attribute in required_attributes
+            if not hasattr(target_model, attribute)
+        ]
+        if not missing_attributes:
+            return
+
     supported_names = ", ".join(cls.__name__ for cls in supported_types)
     raise TypeError(
-        f"{method_name} supports target models [{supported_names}] only, "
+        f"{method_name} supports target models [{supported_names}] or a compatible "
+        f"ModelObject subclass only, "
         f"received {target_model.__class__.__name__}"
     )
 

@@ -2,10 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
 from tqdm import tqdm
 
 from dataset.dataset_object import DatasetObject
@@ -30,7 +28,6 @@ class MlpModel(ModelObject):
         learning_rate: float = 0.01,
         batch_size: int | None = 16,
         layers: list[int] | None = None,
-        sampling: str = "uniform",
         l2_lambda: float = 0.0,
         optimizer: str = "adam",
         criterion: str = "cross_entropy",
@@ -55,7 +52,6 @@ class MlpModel(ModelObject):
             None if batch_size is None else int(batch_size)
         )
         self._layers: list[int] = list(layers or [32, 16])
-        self._sampling: str = str(sampling).lower()
         self._l2_lambda: float = float(l2_lambda)
         self._optimizer_name: str = optimizer
         self._criterion_name: str = criterion.lower()
@@ -75,8 +71,6 @@ class MlpModel(ModelObject):
 
         if self._batch_size is not None and self._batch_size < 1:
             raise ValueError("batch_size must be >= 1")
-        if self._sampling not in {"uniform", "weighted"}:
-            raise ValueError("sampling must be either 'uniform' or 'weighted'")
         if self._l2_lambda < 0.0:
             raise ValueError("l2_lambda must be >= 0")
         if self._weight_decay < 0:
@@ -169,22 +163,6 @@ class MlpModel(ModelObject):
                 criterion = torch.nn.BCELoss(reduction=self._loss_reduction)
                 y_tensor = labels.to(self._device).to(dtype=torch.float32).unsqueeze(1)
 
-            sampler = None
-            if self._sampling == "weighted":
-                label_indices = labels.detach().cpu().numpy()
-                class_counts = np.bincount(label_indices)
-                if np.any(class_counts == 0):
-                    raise ValueError(
-                        "Weighted sampling requires every class to appear at least once"
-                    )
-                class_weights = 1.0 / class_counts
-                sample_weights = class_weights[label_indices]
-                sampler = WeightedRandomSampler(
-                    weights=torch.tensor(sample_weights, dtype=torch.float32),
-                    num_samples=X_tensor.shape[0],
-                    replacement=True,
-                )
-
             effective_batch_size = (
                 X_tensor.shape[0]
                 if self._batch_size is None
@@ -195,25 +173,9 @@ class MlpModel(ModelObject):
 
             self._model.train()
             for _ in tqdm(range(self._epochs), desc="mlp-fit", leave=False):
-                # Merged Batch Iterator Logic
-                if sampler is None:
-                    permutation = torch.randperm(X_tensor.shape[0], device=self._device)
-                    batch_index_iterator = (
-                        permutation[start : start + effective_batch_size]
-                        for start in range(0, X_tensor.shape[0], effective_batch_size)
-                    )
-                else:
-                    sampled_indices = list(iter(sampler))
-                    batch_index_iterator = (
-                        torch.tensor(
-                            sampled_indices[start : start + effective_batch_size],
-                            dtype=torch.long,
-                            device=self._device,
-                        )
-                        for start in range(0, len(sampled_indices), effective_batch_size)
-                    )
-
-                for batch_indices in batch_index_iterator:
+                permutation = torch.randperm(X_tensor.shape[0], device=self._device)
+                for start in range(0, X_tensor.shape[0], effective_batch_size):
+                    batch_indices = permutation[start : start + effective_batch_size]
                     batch_X = X_tensor[batch_indices]
                     batch_y = y_tensor[batch_indices]
                     optimizer.zero_grad()
@@ -224,15 +186,12 @@ class MlpModel(ModelObject):
                         else logits
                     )
                     loss = criterion(loss_input, batch_y)
-                    
-                    # From Snippet 2
                     if self._l2_lambda > 0.0:
                         l2_norm = sum(
                             parameter.pow(2.0).sum()
                             for parameter in self._model.parameters()
                         )
                         loss = loss + self._l2_lambda * l2_norm
-                        
                     loss.backward()
                     optimizer.step()
 
