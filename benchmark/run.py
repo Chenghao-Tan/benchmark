@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+# run example: python benchmark/run.py --suite benchmark/configs/suites/default.yaml --output-csv benchmark/results/default_results.csv
+
 import argparse
 import hashlib
 import json

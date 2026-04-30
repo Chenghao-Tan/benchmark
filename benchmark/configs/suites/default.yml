@@ -1,5 +1,5 @@
 name: default
-base_config: base.yaml
+base_config: base.yml
 output_csv: ./benchmark/results/default_results.csv
 
 datasets:
