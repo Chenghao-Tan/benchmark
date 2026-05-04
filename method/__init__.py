@@ -1,30 +1,43 @@
-from method.apas.apas import ApasMethod
-from method.arg_ensembling.arg_ensembling import ArgEnsemblingMethod
-from method.cchvae.cchvae import CchvaeMethod
-from method.cemsp.cemsp import CemspMethod
-from method.cfrl.cfrl import CfrlMethod
-from method.cfvae.cfvae import CfvaeMethod
-from method.claproar.claproar import ClaproarMethod
-from method.clue.clue import ClueMethod
-from method.cogs.cogs import CogsMethod
-from method.cols.cols import ColsMethod
-from method.cruds.cruds import CrudsMethod
-from method.cvas_proj.cvas_proj import CvasProjMethod
-from method.dice.dice import DiceMethod
-from method.diverse_dist.diverse_dist import DiverseDistMethod
-from method.face.face import FaceMethod
-from method.feature_tweak.feature_tweak import FeatureTweakMethod
-from method.gravitational.gravitational import GravitationalMethod
-from method.gs.gs import GsMethod
-from method.larr.larr import LarrMethod
-from method.mace.mace import MaceMethod
-from method.method_object import MethodObject
-from method.probe.probe import ProbeMethod
-from method.proplace.proplace import ProplaceMethod
-from method.rbr.rbr import RbrMethod
-from method.revise.revise import ReviseMethod
-from method.roar.roar import RoarMethod
-from method.sns.sns import SnsMethod
-from method.toy.toy import ToyMethod
-from method.trex.trex import TrexMethod
-from method.wachter.wachter import WachterMethod
+from __future__ import annotations
+
+from importlib import import_module
+
+
+def _optional_import(module_path: str, symbol: str) -> None:
+    try:
+        module = import_module(module_path)
+    except ModuleNotFoundError:
+        return
+    globals()[symbol] = getattr(module, symbol)
+
+
+_optional_import("method.apas.apas", "ApasMethod")
+_optional_import("method.arg_ensembling.arg_ensembling", "ArgEnsemblingMethod")
+_optional_import("method.cchvae.cchvae", "CchvaeMethod")
+_optional_import("method.cemsp.cemsp", "CemspMethod")
+_optional_import("method.cfrl.cfrl", "CfrlMethod")
+_optional_import("method.cfvae.cfvae", "CfvaeMethod")
+_optional_import("method.claproar.claproar", "ClaproarMethod")
+_optional_import("method.clue.clue", "ClueMethod")
+_optional_import("method.cogs.cogs", "CogsMethod")
+_optional_import("method.cols.cols", "ColsMethod")
+_optional_import("method.cruds.cruds", "CrudsMethod")
+_optional_import("method.cvas_proj.cvas_proj", "CvasProjMethod")
+_optional_import("method.dice.dice", "DiceMethod")
+_optional_import("method.diverse_dist.diverse_dist", "DiverseDistMethod")
+_optional_import("method.face.face", "FaceMethod")
+_optional_import("method.feature_tweak.feature_tweak", "FeatureTweakMethod")
+_optional_import("method.gravitational.gravitational", "GravitationalMethod")
+_optional_import("method.gs.gs", "GsMethod")
+_optional_import("method.larr.larr", "LarrMethod")
+_optional_import("method.mace.mace", "MaceMethod")
+_optional_import("method.method_object", "MethodObject")
+_optional_import("method.probe.probe", "ProbeMethod")
+_optional_import("method.proplace.proplace", "ProplaceMethod")
+_optional_import("method.rbr.rbr", "RbrMethod")
+_optional_import("method.revise.revise", "ReviseMethod")
+_optional_import("method.roar.roar", "RoarMethod")
+_optional_import("method.sns.sns", "SnsMethod")
+_optional_import("method.toy.toy", "ToyMethod")
+_optional_import("method.trex.trex", "TrexMethod")
+_optional_import("method.wachter.wachter", "WachterMethod")

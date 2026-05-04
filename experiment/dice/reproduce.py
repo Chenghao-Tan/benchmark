@@ -214,10 +214,17 @@ def _sample_boundary_points(
 
     for feature_index in continuous_indices:
         radius = radius_multiplier * mads.get(feature_index, 1.0)
-        low = max(lower_bounds[feature_index], factual[feature_index] - radius)
-        high = min(upper_bounds[feature_index], factual[feature_index] + radius)
-        if np.isclose(low, high):
-            samples[:, feature_index] = low
+        feature_lower = float(
+            min(lower_bounds[feature_index], upper_bounds[feature_index])
+        )
+        feature_upper = float(
+            max(lower_bounds[feature_index], upper_bounds[feature_index])
+        )
+        low = max(feature_lower, float(factual[feature_index] - radius))
+        high = min(feature_upper, float(factual[feature_index] + radius))
+        if high < low or np.isclose(low, high):
+            clipped = float(np.clip(factual[feature_index], feature_lower, feature_upper))
+            samples[:, feature_index] = clipped
         else:
             samples[:, feature_index] = rng.uniform(low, high, size=num_samples)
 

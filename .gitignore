@@ -6,3 +6,5 @@ tmp/
 reference/
 AGENTS.md
 .omx/
+results/
+_runs/
